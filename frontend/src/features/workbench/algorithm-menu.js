@@ -1,4 +1,5 @@
 import { graphAlgorithm, graphAlgorithmIds } from './graph-algorithms.js';
+import { plusMenuChapters } from '../visualization/ext/plus-bridge.js';
 
 const chapters = [
   ['第六章 · 图', graphAlgorithmIds.map(id => [id, graphAlgorithm(id).title])],
@@ -6,6 +7,9 @@ const chapters = [
   ['第八章 · 排序', [['bubble-sort', '冒泡排序']]],
   ['自定义', [['custom-array', '自定义代码']]]
 ];
+
+// plus01&02 demo library: 54 examples grouped by package (data only; menu markup/CSS untouched)
+chapters.push(...plusMenuChapters());
 
 export function createAlgorithmMenu(root, onSelect) {
   const trigger = root.querySelector('#algorithm-trigger');

@@ -10,6 +10,8 @@ const sourceTokens = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[^]*?\*\/|\/\/[^\r
 export function displaySourceLines(run) {
   const lines = run.sourceLines ?? [];
   if (run.algorithm === 'custom-array') return lines;
+  // plus 示例的"源码行"其实是每一步的中文说明，不是 C 代码：去掉引号/注释剥离，否则引号里的字会丢
+  if (run.plus) return lines.map(line => ({ ...line, text: line.text.trimEnd() }));
   return lines
     .map(line => ({ ...line, text: line.text.replace(sourceTokens, token => token.startsWith('/') ? ' ' : token).trimEnd() }))
     .filter(line => line.text.trim());

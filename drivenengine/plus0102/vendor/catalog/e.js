@@ -1,0 +1,117 @@
+/** 算法包 E · 线性表与数组算法（9 项 × 3 变体 = 27 个演示） */
+export const PKG_E = {
+  id: 'E',
+  name: '线性表与数组算法',
+  doc: 'docs/team/final/tasks/e-linear-array.md',
+  title: '线性表与数组算法',
+  items: [
+    {
+      id: 'array-list-reverse', title: '顺序表逆置', points: 1,
+      ds: ['sqlist'], style: 1,
+      focus: '左右下标、交换的两项、交换后数组、中间不交换的边界',
+      events: ['init', 'swap', 'advance', 'meet', 'done'],
+      path: 'algorithms/e/array-list-reverse.js',
+      variants: [
+        { id: 'v1', name: '双指针就地交换', note: 'i 从 0、j 从 n-1 向中间靠，每次交换后各自前进，i>=j 结束' },
+        { id: 'v2', name: '递归逆置', note: 'reverse(i,j) 交换首尾后递归 reverse(i+1,j-1)，展示调用栈深度' },
+        { id: 'v3', name: '借助临时数组', note: '先整体拷贝到 temp 再倒序写回，展示 O(n) 额外空间与两次遍历' },
+      ],
+    },
+    {
+      id: 'array-list-delete-range', title: '顺序表区间删除', points: 1,
+      ds: ['sqlist'], style: 1,
+      focus: '待删闭区间 [l,r]、搬移来源与目标、逻辑长度更新、越界拒绝',
+      events: ['init', 'validate', 'invalid', 'shift', 'truncate', 'done', 'miss' ],
+      path: 'algorithms/e/array-list-delete-range.js',
+      variants: [
+        { id: 'v1', name: '单循环前移覆盖', note: '把 r 后元素依次搬到 l 起的位置，一趟循环，最后改逻辑长度' },
+        { id: 'v2', name: '读写双指针', note: '读指针扫全表，写指针只在保留元素时前进，天然处理任意区间' },
+        { id: 'v3', name: '带搬移计数版', note: '与 v1 同逻辑，但统计搬移次数与时间复杂度，用于对比两种写法' },
+      ],
+    },
+    {
+      id: 'singly-linked-list-insert', title: '单链表插入', points: 1,
+      ds: ['linkedlist'], style: 3,
+      focus: '前驱定位、新结点编号、先接后继再改前驱、头指针更新、非法位置',
+      events: ['init', 'locate-prev', 'new-node', 'link-next', 'link-prev', 'update-head', 'invalid', 'done'],
+      path: 'algorithms/e/singly-linked-list-insert.js',
+      variants: [
+        { id: 'v1', name: '前驱定位后接链', note: '走到 pos-1 前驱，先 new.next = prev.next，再 prev.next = new' },
+        { id: 'v2', name: '头结点（dummy）统一版', note: '增加不存值的头结点，插入 0 号位与其他位置统一处理，无需单独判头' },
+        { id: 'v3', name: '按值有序插入', note: '不按下标：沿链找第一个大于新值的结点，插在它前面，保持有序' },
+      ],
+    },
+    {
+      id: 'singly-linked-list-delete', title: '单链表删除', points: 1,
+      ds: ['linkedlist'], style: 3,
+      focus: '前驱、目标结点、目标后继、改链结果、删头/删尾、空表非法',
+      events: ['init', 'locate-prev', 'target', 'relink', 'update-head', 'free-node', 'invalid', 'done'],
+      path: 'algorithms/e/singly-linked-list-delete.js',
+      variants: [
+        { id: 'v1', name: '前驱改链', note: '定位 pos-1 前驱，prev.next = target.next，输出被删结点值' },
+        { id: 'v2', name: '头结点统一版', note: '带 dummy 头结点，删除任意位置都走同一条 prev.next 改写语句' },
+        { id: 'v3', name: '删除所有匹配值', note: '遍历整表，删除所有值等于 x 的结点（可能连续多个），展示指针接力' },
+      ],
+    },
+    {
+      id: 'singly-linked-list-reverse', title: '单链表逆置', points: 1,
+      ds: ['linkedlist'], style: 3,
+      focus: 'prev / cur / next 三指针、每次改链方向、头指针最终用 prev',
+      events: ['init', 'save-next', 'relink', 'advance', 'update-head', 'done', 'found' ],
+      path: 'algorithms/e/singly-linked-list-reverse.js',
+      variants: [
+        { id: 'v1', name: '三指针迭代', note: '保存 cur.next → 改 cur.next=prev → prev/cur 同步前进，最后 head=prev' },
+        { id: 'v2', name: '递归逆置', note: 'reverse(cur.next) 先逆置后续，再让后继指回自己，最后返回新的头' },
+        { id: 'v3', name: '头插法重建', note: '把结点逐个从原表摘下，头插到新表，天然逆序，展示两次遍历' },
+      ],
+    },
+    {
+      id: 'kth-from-end', title: '找倒数第 K 个结点', points: 1,
+      ds: ['linkedlist'], style: 3,
+      focus: '快慢指针、间距、剩余步数、最终结点编号、K 越界拒绝',
+      events: ['init', 'fast-advance', 'sync-move', 'found', 'invalid', 'done'],
+      path: 'algorithms/e/kth-from-end.js',
+      variants: [
+        { id: 'v1', name: '快慢指针', note: '快指针先走 K 步，然后快慢同步走到快指针为空，慢指针即答案' },
+        { id: 'v2', name: '两次遍历（先求长度）', note: '先走一遍得长度 n，再从头走 n-K 步，对照一次遍历的差异' },
+        { id: 'v3', name: '带边界校验版', note: '同 v1，但先校验 K>=1 且 K<=n（提前遍历计数），越界直接拒绝' },
+      ],
+    },
+    {
+      id: 'sparse-matrix-transpose', title: '稀疏矩阵转置', points: 2,
+      ds: ['grid2d', 'matrix'], style: 6,
+      focus: '三元组行列互换、列计数与起始位置、输出位置写入',
+      events: ['init', 'count-column', 'prefix-start', 'write-triple', 'done'],
+      path: 'algorithms/e/sparse-matrix-transpose.js',
+      variants: [
+        { id: 'v1', name: '列计数 + 起始位置（快速转置）', note: '先统计每列非零个数并求前缀起点，再按原行序一次写入输出三元组，O(cols+terms)' },
+        { id: 'v2', name: '按列扫描的简单转置', note: '外层扫列、内层扫三元组，O(cols×terms)，用于对照快速转置的加速点' },
+        { id: 'v3', name: '行逻辑链接版', note: '维护 rpos[] 行起始，按行遍历原矩阵，转置后天然按行（原列）有序' },
+      ],
+    },
+    {
+      id: 'radix-sort', title: '基数排序', points: 2,
+      ds: ['sqlist', 'queue'], style: 1,
+      focus: '位权（个位/十位/百位）、各桶内容、按桶号回收顺序、稳定性',
+      events: ['init', 'digit', 'distribute', 'bucket', 'collect', 'pass-end', 'done'],
+      path: 'algorithms/e/radix-sort.js',
+      variants: [
+        { id: 'v1', name: 'LSD 十进制计数桶', note: '从个位到最高位逐位稳定入桶（10 桶）再按桶号回收' },
+        { id: 'v2', name: 'MSD 递归分桶', note: '从最高位开始分桶，桶内递归处理次高位，展示与 LSD 的分治差异' },
+        { id: 'v3', name: '二进制位基数（2 桶）', note: '按二进制位从低到高分 2 个桶，展示位运算取位与桶数换位数的取舍' },
+      ],
+    },
+    {
+      id: 'counting-sort', title: '计数排序', points: 1,
+      ds: ['sqlist'], style: 1,
+      focus: '最小值偏移、频次数组、前缀和、从右往左回填、值域超限拒绝',
+      events: ['init', 'count-frequency', 'prefix-sum', 'write-back', 'overflow', 'done'],
+      path: 'algorithms/e/counting-sort.js',
+      variants: [
+        { id: 'v1', name: '直接按频次展开', note: '统计频次后按值从小到大直接展开写回（同值顺序不可保证，不稳定）' },
+        { id: 'v2', name: 'min 偏移支持负数', note: '记录 min，用 a[i]-min 作下标，负数与跨度超限都在分配前处理' },
+        { id: 'v3', name: '稳定版（从右往左回填）', note: '前缀和得到末尾位置，从右往左扫描回填并递减计数，保证稳定' },
+      ],
+    },
+  ],
+};

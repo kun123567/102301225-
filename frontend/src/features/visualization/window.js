@@ -11,7 +11,7 @@ import { createExplanationPanel } from './explanation-panel.js';
 import { describeGraphStep } from './graph-explanation.js';
 import { buildGraphPreview } from './bfs-preview.js';
 import { buildPrototypeArrayFrame } from './prototype-array.js';
-
+import { createPlusView, plusCase, isPlus } from './ext/plus-bridge.js';
 
 const TEMPLATE = `
 <div class="win-bar">
@@ -115,6 +115,13 @@ export function createVizWindow(host, {
     legend.setAttribute('aria-label', '数组写入图例');
     legend.innerHTML = '<span><b class="legend-right">橙</b> 本步写入位置</span>';
   }
+  // plus01&02 示例：标题别再显示"二分查找 · 数组视图"（B 树/图/栈那些根本不是数组）
+  if (isPlus(algorithm)) {
+    const plusItem = plusCase(algorithm);
+    root.querySelector('.win-sub').textContent = (plusItem ? plusItem.pkgName : '示例库') + ' · ' + (plusItem ? plusItem.title : '示例');
+    root.querySelector('.vh-title').textContent = '示例视图';
+    root.querySelector('.vh-sub').textContent = plusItem ? plusItem.title : '';
+  }
   host.append(root);
 
   // 防御：若上一个窗口异常销毁、body 上残留了全屏类，这里兜一次，保证"新窗口不是全屏"
@@ -160,6 +167,16 @@ export function createVizWindow(host, {
   }
 
   function fitView() {
+    /* plus01&02 的**结构族**示例是"文档流卡片"（每层一张卡），本来就按容器宽度排好版，
+       不能被视口的自动取景缩放：否则上一轮的 scale 会被继承/反复相乘，
+       卡越走越小、最后看不见。这里对结构族 plus 运行只把视图复位成 1:1。
+       数组族 plus 仍然走本项目的数组链路，照旧自动取景。 */
+    if (currentRun && currentRun.plus && currentRun.structure !== 'array') {
+      view.scale = 1; view.x = 0; view.y = 0;
+      applyView();
+      warnIfCanvasTiny();
+      return;
+    }
     const cw = body.clientWidth || 1;
     const ch = body.clientHeight || 1;
     const sw = scene.offsetWidth || 1;
@@ -359,6 +376,10 @@ export function createVizWindow(host, {
       scene.append(graphPreview.element);
       graphExplanation = createExplanationPanel();
       explainHost.replaceChildren(graphExplanation.explain);
+    } else if (nextRun.plus) {
+      // plus01&02 demo library: arrays keep this project's array visualization (only frameBuilder swapped);
+      // other families use the new prototype (vendor/plus + plus-viz.css). Existing styles/animations untouched.
+      viz = createPlusView(vizHost, nextRun, { explainContainer: explainHost });
     } else viz = createVisualization(vizHost, {
       run: nextRun,
       explainContainer: explainHost,

@@ -6,7 +6,9 @@
   <title>二分查找 · 看懂每一步</title>
   <link rel="icon" href="/assets/logo.svg">
   <link rel="stylesheet" href="/src/features/visualization/visualization.css">
+<link rel="stylesheet" href="./vendor/plus/app/plus-viz.css">
   <link rel="stylesheet" href="/src/features/agent/chat.css">
+  <link rel="stylesheet" href="/src/features/custom-code/detect.css">
   <link rel="stylesheet" href="/src/features/exercises/exercises.css">
   <link rel="stylesheet" href="/src/features/visualization/window.css">
   <link rel="stylesheet" href="/src/styles/workbench.css">
@@ -160,12 +162,20 @@
             <button id="bfs-add-edge" type="button" class="secondary">＋ 添加一条边</button>
           </section>
         </div>
+        <div id="plus-input-fields" hidden>
+          <label for="plus-sample">示例<select id="plus-sample"></select></label>
+          <label for="plus-variant">变体<select id="plus-variant"></select></label>
+          <label class="plus-input-label" for="plus-input">示例输入（可直接修改，改完点「开始分析」）<textarea id="plus-input" rows="4" spellcheck="false" aria-describedby="plus-help"></textarea></label>
+          <p id="plus-help" class="muted">正在载入示例…</p>
+        </div>
         <div class="input-actions"><button id="fillDemo" type="button" class="secondary">↻ 填入示例</button><button id="bfs-back" type="button" class="secondary" hidden>上一步</button><button id="bfs-next" type="button" hidden>下一步</button><button id="startBtn" type="submit">开始分析</button></div>
         <p id="input-help" class="muted">最多 100 个非递减安全整数，逗号分隔；留空为空数组。允许负数和重复值。</p>
         <div id="custom-code-fields" hidden>
+          <label for="custom-sample">示例<select id="custom-sample"></select></label>
           <label for="code-language">编译语言<select id="code-language"><option value="c">C</option><option value="cpp">C++</option></select></label>
-          <label for="code-input">你的代码<textarea id="code-input" rows="12" maxlength="5000" spellcheck="false" aria-describedby="code-help"></textarea></label>
+          <label for="code-input">你的代码<textarea id="code-input" rows="12" maxlength="20000" spellcheck="false" aria-describedby="code-help"></textarea></label>
           <p id="code-help" class="muted">编写一个 void sort(int a[], int n) 函数。支持初始化的 int 变量、数组读写、条件和循环，控制语句使用花括号。点击「填入示例」查看写法。</p>
+          <div id="detect-panel" aria-live="polite"></div>
         </div>
         <p id="msgBox" role="status" aria-live="polite"></p>
       </form>

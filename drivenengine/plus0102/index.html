@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plus01&amp;02 · 统一渲染端（add02 壳 + add01 的 9 个渲染器 + 54 个内置案例）</title>
+<link rel="stylesheet" href="./vendor/shell/window.css">
+<link rel="stylesheet" href="./app/app.css">
+<link rel="stylesheet" href="./app/anim.css">
+<link rel="stylesheet" href="./app/bsviz-base.css">
+<link rel="stylesheet" href="./app/bsviz-extra.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><b>plus01&amp;02</b><span>统一渲染端 · add02 做壳 / add01 做画</span></div>
+  <div class="meta" id="catalog-total"></div>
+</header>
+
+<main class="layout">
+  <!-- 左：目录 -->
+  <aside class="side">
+    <div class="side-block">
+      <input id="search" type="search" placeholder="搜索案例或结构 id（sort / hash / tree …）" autocomplete="off">
+    </div>
+    <div id="pkg-list" class="pkg-list"></div>
+  </aside>
+
+  <!-- 中：案例信息 + 控制 + 窗口 -->
+  <section class="center">
+    <div class="crumb-bar">
+      <div class="crumb-main">
+        <div id="crumb" class="crumb">—</div>
+        <div id="crumb-sub" class="crumb-sub">—</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="ctl-row">
+        <span class="lbl" title="同一案例的 3 个实现策略">变体</span>
+        <div id="variants" class="chips"></div>
+      </div>
+      <div class="ctl-row">
+        <span class="lbl" title="该案例自带的输入样例">样例</span>
+        <div id="samples" class="chips"></div>
+      </div>
+      <div class="ctl-row">
+        <span class="lbl" title="这个案例用到的数据结构（决定默认画法）">结构</span>
+        <select id="ds-select"></select>
+        <span class="lbl" title="同族结构的其它画法（有损换算，界面上会标注）">画法</span>
+        <select id="style-select"></select>
+        <span class="lbl" title="该画法自己的开关（06 的同一套：形状/网格/连线/DrawMode/布局）">画法开关</span>
+        <select id="drawmode"></select>
+        <span class="lbl" title="播放速度">速度</span>
+        <input id="speed" type="range" min="1" max="5" value="3" aria-label="播放速度">
+        <span id="speed-val" class="mono">3</span>
+      </div>
+    </div>
+
+    <div id="error" class="error" hidden></div>
+
+    <!-- 播放控制只在窗口里有一套（时间轴 transport），这里不再重复 -->
+    <div id="viz-host" class="viz-host"></div>
+  </section>
+
+  <!-- 右：信息 / 代码 / 本步 / 说明 -->
+  <aside class="right">
+    <div class="panel info">
+      <h4>渲染信息</h4>
+      <div class="kv"><span class="k">渲染器</span><span id="engine-meta" class="v mono">—</span></div>
+      <div class="kv"><span class="k">换算</span><span id="convert-note" class="v">—</span></div>
+    </div>
+    <div class="panel">
+      <h4>代码（sourceLines）</h4>
+      <ol id="code" class="code"></ol>
+    </div>
+    <div class="panel">
+      <h4>本步</h4>
+      <div class="kv"><span class="k">事件</span><span id="event" class="v mono">—</span></div>
+      <div class="kv"><span class="k">变量</span><span id="vars" class="v mono">—</span></div>
+      <div class="kv"><span class="k">说明</span><span id="explain" class="v">—</span></div>
+    </div>
+    <div class="panel">
+      <h4>怎么用</h4>
+      <p class="hint">
+        左栏选案例 → 变体/样例决定"算的是什么" → 结构/画法决定"怎么画" → 窗口时间轴逐步播放
+        （<code>←/→</code> 步进，<code>空格</code> 播放暂停，<code>Home/End</code> 首末步）。
+      </p>
+    </div>
+  </aside>
+</main>
+
+<script type="module" src="./app/main.js"></script>
+</body>
+</html>

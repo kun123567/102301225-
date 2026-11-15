@@ -1,0 +1,81 @@
+/* detect.css -- 自定义代码「自动识别」面板（只新增 .detect-* 选择器，不改既有样式） */
+
+#detect-panel {
+  border: 1px solid var(--border, #e3e8ee);
+  border-radius: 9px;
+  background: #fbfaff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+#detect-panel .detect-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#detect-panel .detect-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #243049;
+}
+
+#detect-panel .detect-status {
+  font-size: 11px;
+}
+
+#detect-panel .detect-status[data-tone="warn"] { color: #9a6b00; }
+#detect-panel .detect-status[data-tone="bad"] { color: #a92e35; }
+
+#detect-panel .detect-run {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+#detect-panel .detect-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+#detect-panel .detect-item {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid #e7e2f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+#detect-panel .detect-item.is-clickable { cursor: pointer; }
+#detect-panel .detect-item.is-clickable:hover { border-color: #c9bcf2; background: #faf8ff; }
+
+#detect-panel .detect-item b {
+  font-size: 12px;
+  color: #172033;
+}
+
+#detect-panel .detect-meta {
+  font-size: 10.5px;
+  color: #6b7686;
+  font-variant-numeric: tabular-nums;
+}
+
+#detect-panel .detect-why {
+  font-size: 11px;
+  color: #5a6478;
+  line-height: 1.5;
+}
+
+#detect-panel .detect-help {
+  font-size: 11px;
+}
+
+@media (max-width: 540px) {
+  #detect-panel .detect-run { margin-left: 0; }
+}
