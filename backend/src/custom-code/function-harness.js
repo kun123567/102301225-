@@ -155,11 +155,24 @@ export function engineTraceToRun({ trace, harness, initialArray = [], sourceVers
   const last = steps[steps.length - 1];
   last.done = true;
   last.result = last.array.length ? [...last.array] : null;
-  /* 有步骤但一次数组变化都没有 → 几乎都是"多条语句挤在一行"（插桩按一条语句一行工作），
-     给一句能照做的提示，不静默交付一个看着正常却什么都没动的回放。 */
-  const notice = writes === 0
-    ? '本次没有记录到数组变化：请把 `{ … }` 里的语句拆成一行一句再运行。'
-    : null;
+  /* 有步骤但一次数组变化都没有 —— 不假装知道原因，两个可能都说清楚，并给出能照做的动作：
+     ① 这段代码本来就不改输入数组（只把中间结果放在别的数组/标量里，如"接雨水"的 leftMax/rightMax）
+        → 想看中间数组请用整程序模式；
+     ② 有语句写在同一行的花括号里（`{ a[0]=1; }`），插桩按"一条语句一行"工作，这类不会被单独插桩
+        → 拆成一行一句。检测到 ② 时附上行数，让用户知道去哪改。 */
+  const packedLines = (harness?.sourceLines || []).filter((text) => {
+    const code = String(text).replace(/\/\/.*$/, '');
+    const open = code.indexOf('{');
+    if (open < 0) return false;
+    const close = code.lastIndexOf('}');
+    const body = close > open ? code.slice(open + 1, close) : code.slice(open + 1);
+    return (body.match(/;/g) || []).length >= 1;      // 花括号里还有语句 → 那一句不会被单独插桩
+  }).length;
+  const notice = writes !== 0 ? null
+    : '本次没有记录到数组变化。两种常见原因：① 这段代码没有修改输入数组（结果算在别的变量里）——'
+      + '想看中间数组请用整程序模式（保留 `int main`）；② 有语句写在同一行的花括号里，插桩只按"一条语句一行"工作——'
+      + '把它们拆成一行一句再试。'
+      + (packedLines > 0 ? '（检测到 ' + packedLines + ' 行属于第 ② 种）' : '');
   return {
     ok: true,
     algorithm: 'custom-array',

@@ -17,6 +17,15 @@ const DEBOUNCE_MS = 600;
 
 const LOGICAL_TEXT = { linear: '线性', tree: '树形', graph: '图形', set: '集合' };
 const SOURCE_TEXT = { ast: '声明表', semantic: '语义', regex: '文本规则' };
+/* 「是不是栈/队列」：后端 detectStatic 给每个条目一个 role。
+   kind='array' 是**否定结论**（普通数组、没有进出方向），也要显示出来，
+   否则用户会以为"没识别出东西"。 */
+const ROLE_TEXT = {
+  stack: '栈（后进先出）',
+  queue: '队列（先进先出）',
+  array: '普通数组（无进出方向）',
+  structure: '结构（非数组）',
+};
 
 export function createDetectPanel({ mount, request, onJumpLine = () => {} } = {}) {
   if (!mount) throw new Error('createDetectPanel 需要一个挂载点');
@@ -75,6 +84,16 @@ export function createDetectPanel({ mount, request, onJumpLine = () => {} } = {}
     meta.textContent = parts.join(' · ');
 
     li.append(name, meta);
+    if (item.role && item.role.kind) {
+      const role = doc.createElement('span');
+      role.className = 'detect-role';
+      role.dataset.role = item.role.kind;
+      const parts2 = [ROLE_TEXT[item.role.kind] || item.role.zh || item.role.kind];
+      if (item.role.direction) parts2.push(item.role.direction);
+      if (typeof item.role.confidence === 'number') parts2.push('判据置信 ' + item.role.confidence.toFixed(2));
+      role.textContent = '用法：' + parts2.join(' · ');
+      li.append(role);
+    }
     if (item.why) {
       const why = doc.createElement('span');
       why.className = 'detect-why';
@@ -95,7 +114,12 @@ export function createDetectPanel({ mount, request, onJumpLine = () => {} } = {}
       help.textContent = '可能是：代码没写完、只用了基本变量，或写法超出当前判据（26 项目录以外）。';
       return;
     }
-    setStatus('识别到 ' + result.count + ' 项');
+    const sum = result.summary || {};
+    const bits = [];
+    if ((sum.stacks || []).length) bits.push('栈 ' + sum.stacks.join('/'));
+    if ((sum.queues || []).length) bits.push('队列 ' + sum.queues.join('/'));
+    if ((sum.arrays || []).length) bits.push('普通数组 ' + sum.arrays.length + ' 个');
+    setStatus('识别到 ' + result.count + ' 项' + (bits.length ? '（' + bits.join('，') + '）' : ''));
     const weak = (result.items || []).filter((it) => typeof it.conf === 'number' && it.conf < 0.8).length;
     help.textContent = weak
       ? '有 ' + weak + ' 项置信度偏低（<0.8），运行后可用指针/入出度事实复核。'
@@ -117,7 +141,7 @@ export function createDetectPanel({ mount, request, onJumpLine = () => {} } = {}
     try {
       const result = await request('/api/detect', { body: { code: text } });
       if (mine !== generation) return last;                  // 已经又改了代码，丢弃过期结果
-      last = { code: text, count: result.count || 0, items: result.items || [] };
+      last = { code: text, count: result.count || 0, items: result.items || [], summary: result.summary || null };
       paint(last);
       return last;
     } catch (error) {

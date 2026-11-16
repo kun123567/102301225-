@@ -69,6 +69,80 @@ export function dataStructures() {
  * @returns {{ok:boolean, items:Array, count:number}}
  */
 const TYPE_WORDS = new Set(['int', 'char', 'float', 'double', 'bool', 'void', 'long', 'short', 'unsigned', 'signed', 'string']);
+
+/* ---------------- 「是不是栈/队列」——静态用法判定 ----------------
+ *
+ * 只认数组的**用法证据**，不靠变量名猜：
+ *   栈：出现 top/sp 游标，且数组按下标进出（`a[top]` / `a[++top]` / `a[top++]` / `a[--top]`）
+ *   队列：出现 front + rear（或 head + tail），且数组按下标读写（`q[rear]` / `q[front]`）
+ * 静态识别器已经认定是 sqstack / sqqueue 时，直接采信（置信更高）。
+ * 两者都没有 → 明确回答"普通数组（无进出方向）"，不再让用户以为没识别出东西。
+ */
+/* 只有这些模板才是"按下标访问的数组形状"，才配谈栈/队列/普通数组。
+   其余（链表/树/图/结构体）给 kind:'structure'，避免把 QNode 这种结点结构说成"普通数组"。 */
+const ARRAYISH_TPL = new Set(['sqstack', 'sqqueue', 'sqlist', 'proto-seq', 'sstr', 'mgraph', 'hashtab', 'ufset', 'heap']);
+const LINKED_QUEUE_TPL = 'linkqueue';
+const STACK_CURSORS = ['top', 'sp'];
+const QUEUE_CURSORS = [['front', 'rear'], ['head', 'tail']];
+const hasWord = (text, word) => new RegExp('\\b' + word + '\\b').test(text);
+
+/** 该数组名在源码里按下标出现过的所有写法（`a[x]`、`a[++top]` …） */
+function indexUsesOf(text, name) {
+  const out = new Set();
+  const re = new RegExp('\\b' + name + '\\s*\\[([^\\]]*)\\]', 'g');
+  let m;
+  while ((m = re.exec(text))) out.add(String(m[1]).replace(/\s+/g, ''));
+  return out;
+}
+
+/**
+ * @param {string} text 用户源码
+ * @param {{name:string, templateId:string|null}} item 识别器给出的条目
+ * @returns {{kind:'stack'|'queue'|'array'|'linked', zh:string, direction:string, confidence:number, evidence:string[]}}
+ */
+export function classifyArrayRole(text, item) {
+  const source = String(text ?? '');
+  const name = String(item?.name ?? '');
+  const tpl = String(item?.templateId ?? '');
+  const evidence = [];
+
+  /* ① 识别器直接命中模板（最可靠） */
+  if (tpl === 'sqstack') return { kind: 'stack', zh: '栈（顺序栈）', direction: '只在末尾进出（LIFO），栈顶在末格', confidence: 0.92, evidence: ['识别器：顺序栈模板'] };
+  if (tpl === 'sqqueue') return { kind: 'queue', zh: '队列（循环队列）', direction: '队头出、队尾进（FIFO）', confidence: 0.92, evidence: ['识别器：循环队列模板'] };
+  if (tpl === 'linkqueue') return { kind: 'queue', zh: '队列（链队列）', direction: '队头出、队尾进（FIFO），结点用指针串起来', confidence: 0.9, evidence: ['识别器：链队列模板'] };
+
+  /* ①-b 不是数组形状的结构（链表/树/图/结构体）→ 不参与栈/队列判定 */
+  if (!ARRAYISH_TPL.has(tpl) && tpl !== LINKED_QUEUE_TPL) {
+    return { kind: 'structure', zh: '结构（非数组）', direction: '', confidence: item?.conf ?? null, evidence: ['模板 ' + (tpl || '未知') + ' 不是数组形状'] };
+  }
+
+  /* ② 源码用法证据 */
+  const uses = name ? indexUsesOf(source, name) : new Set();
+  const stackCursor = STACK_CURSORS.find((cursor) => hasWord(source, cursor));
+  const queueCursors = QUEUE_CURSORS.find(([a, b]) => hasWord(source, a) && hasWord(source, b));
+
+  if (stackCursor) {
+    const bracket = [...uses].some((u) => u === stackCursor || u === '++' + stackCursor || u === stackCursor + '++' || u === '--' + stackCursor || u === stackCursor + '--');
+    if (bracket) {
+      evidence.push('游标 ' + stackCursor + ' 与 ' + name + '[' + stackCursor + '…] 同现');
+      return { kind: 'stack', zh: '栈（顺序栈）', direction: '只在末尾进出（LIFO），栈顶在末格', confidence: 0.85, evidence };
+    }
+    evidence.push('有游标 ' + stackCursor + '，但没看到 ' + name + ' 用它当下标');
+  }
+  if (queueCursors) {
+    const [a, b] = queueCursors;
+    const bracket = [...uses].some((u) => u.includes(a) || u.includes(b));
+    if (bracket) {
+      evidence.push('front/rear 型游标 ' + a + '/' + b + ' 与 ' + name + '[' + b + '…] 同现');
+      return { kind: 'queue', zh: '队列（循环队列）', direction: '队头出、队尾进（FIFO）', confidence: 0.85, evidence };
+    }
+    evidence.push('有游标 ' + a + '/' + b + '，但没看到 ' + name + ' 用它当下标');
+  }
+
+  /* ③ 都没有 → 明确回答"普通数组" */
+  return { kind: 'array', zh: '普通数组（无进出方向）', direction: '', confidence: item?.conf ?? null, evidence: evidence.length ? evidence : ['没有 top/front/rear 这类游标'] };
+}
+
 export function detectStatic(code) {
   const AVC = loadAvc();
   if (!AVC.detect || typeof AVC.detect.detect !== 'function') throw new Error('识别器未就绪（AVC.detect 缺失）');
@@ -78,17 +152,39 @@ export function detectStatic(code) {
     /* base 的兜底正则偶尔把 `int a[N]` 里的类型词当成"结构名"报出来（int / char…），
        这类噪声对用户没有信息量，过滤掉；真结构（数组/链表/树/图…）不受影响。 */
     .filter((it) => !TYPE_WORDS.has(String(it.name || '').trim().toLowerCase()))
-    .map((it) => ({
-    name: it.name || it.zh || '',
-    templateId: it.templateId || null,
-    logical: it.logical || null,
-    conf: typeof it.conf === 'number' ? it.conf : null,
-    source: it.source || null,
-    line: Number.isInteger(it.line) ? it.line : null,
-    why: it.why || '',
-    text: it.text || '',
-  }));
-  return { ok: true, count: items.length, items };
+    .map((it) => {
+    const base = {
+      name: it.name || it.zh || '',
+      templateId: it.templateId || null,
+      logical: it.logical || null,
+      conf: typeof it.conf === 'number' ? it.conf : null,
+      source: it.source || null,
+      line: Number.isInteger(it.line) ? it.line : null,
+      why: it.why || '',
+      text: it.text || '',
+    };
+    /* 「是不是栈/队列」：数组类条目一律给出结论（含"普通数组"），其余条目也带上 role 便于前端统一展示 */
+    base.role = classifyArrayRole(text, base);
+    return base;
+  });
+  /* 同一个变量常被多条规则命中（sqstack + proto-seq 各报一次），面板上会重复。
+     按名字去重，留"结论更具体 + 置信更高"的那条。 */
+  const RANK = { stack: 3, queue: 3, structure: 2, array: 1 };
+  const byName = new Map();
+  for (const item of items) {
+    const key = String(item.name);
+    const prev = byName.get(key);
+    const rank = RANK[item.role.kind] || 0;
+    const prevRank = prev ? (RANK[prev.role.kind] || 0) : -1;
+    if (!prev || rank > prevRank || (rank === prevRank && (item.role.confidence ?? 0) > (prev.role.confidence ?? 0))) byName.set(key, item);
+  }
+  const unique = [...byName.values()];
+  const summary = { stacks: [], queues: [], arrays: [], others: [] };
+  for (const item of unique) {
+    const bucket = item.role.kind === 'stack' ? 'stacks' : item.role.kind === 'queue' ? 'queues' : item.role.kind === 'array' ? 'arrays' : 'others';
+    summary[bucket].push(item.name);
+  }
+  return { ok: true, count: unique.length, found: items.length, items: unique, summary };
 }
 
 /* ---------------- 整程序：真编译 + 插桩 + 运行 ---------------- */
@@ -99,13 +195,54 @@ const LADDER = [
   { name: 'trace-only', opt: { withWatches: false, withDumps: false, withFrame: true } },
 ];
 
+/* 这些写法只可能是 C++（`class Trie` 交给 C 编译器会报
+   "Missing or misspelled data type near 'class'"）。只用来**自动换语言重试**，不做别的判断。 */
+const CPP_MARKERS = [
+  /\bclass\s+[A-Za-z_]\w*/,
+  /\bnamespace\b/,
+  /\btemplate\s*</,
+  /\b(?:public|private|protected)\s*:/,
+  /\bnullptr\b/,
+  /#include\s*<(?:iostream|string|vector|map|queue|stack|algorithm|set|list)>/,
+  /\bstd\s*::/,
+  /[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*/,
+  /\bnew\s+[A-Za-z_]\w*/,
+  /\bcout\b|\bcin\b|\bcerr\b/,
+];
+
+/** 这段代码看起来是 C++（只看内容，不看 UI 里选的语言） */
+export function looksLikeCpp(code) {
+  const text = String(code ?? '').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+  return CPP_MARKERS.some((re) => re.test(text));
+}
+
 /**
  * 编译 + 插桩 + 运行，返回真实执行事件（不落盘到项目目录，用系统临时目录）
+ *
+ * `lang:'c'` 但代码其实是 C++ 时，会自动用 C++ 再试一次（结果里标 `langUsed:'cpp'` / `autoSwitched:true`），
+ * 否则用户只会看到 "Missing or misspelled data type near 'class'" 这种莫名其妙的报错。
+ *
  * @param {{code:string, lang?:'c'|'cpp', maxSteps?:number, stdin?:string, timeoutMs?:number}} input
  */
 export async function traceProgram(input) {
+  const declared = input?.lang ?? 'c';
+  const first = await traceProgramOnce(input, declared);
+  if (first.ok || first.stage !== 'compile' || declared === 'cpp') return first;
+  if (!looksLikeCpp(input?.code)) return first;
+  /* 编译失败 + 代码里有 C++ 特征 → 换 C++ 再试一次；成功就带上说明 */
+  const retry = await traceProgramOnce(input, 'cpp');
+  if (!retry.ok) return { ...first, triedCpp: true, cppFailure: retry };
+  return {
+    ...retry,
+    langUsed: 'cpp',
+    autoSwitched: true,
+    note: '这段代码是 C++（含 class/namespace/new 等），已自动按 C++ 编译。',
+  };
+}
+
+async function traceProgramOnce(input, forcedLang) {
   const { maxSteps = 4000, stdin = '', timeoutMs = 8000, withLayers = false } = input ?? {};
-  const lang = input?.lang ?? 'c';
+  const lang = forcedLang || input?.lang || 'c';
   /* 从网页/编辑器粘过来的代码常带 UTF-8 BOM，Watcom 会当成非法字符报 "found ' '"。
      这里统一去掉（含首部空白前的 BOM）。 */
   const code = String(input?.code ?? '').replace(/^\uFEFF/, '');
@@ -185,7 +322,11 @@ export async function traceProgram(input) {
        前端拿它就能直接走 createPlusView，不需要再理解事件流。 */
     if (withLayers) {
       try {
-        result.layerRun = buildLayerRun({ trace: { events }, sourceLines: String(code).split('\n') });
+        /* 静态识别结果一起传下去：数组层据此标出"栈/队列/堆/哈希"的方向语义
+           （只画一根横轴的话，栈和普通数组长得一模一样）。识别失败不影响出图。 */
+        let statics = [];
+        try { statics = detectStatic(code).items || []; } catch (e) { statics = []; void e; }
+        result.layerRun = buildLayerRun({ trace: { events }, sourceLines: String(code).split('\n'), statics });
       } catch (error) {
         result.layerRun = { ok: false, error: '结构折叠失败：' + error.message };
       }

@@ -206,6 +206,37 @@ static void __avc_ai(int line, const char* name, int idx, long v)
     __avc_out(b);
 }
 
+/* 字符数组的元素：和 __avc_ai 一样，只是类型标记写 'c'
+ * （`char s[] = "hello"` 画成 104/101/108… 谁也认不出，标成字符才看得懂）。 */
+static void __avc_aic(int line, const char* name, int idx, long v)
+{
+    char b[600];
+    __avc_open();
+    sprintf(b, "V|%d|%s[%d]|c|%ld", line, name, idx, v);
+    __avc_out(b);
+}
+
+/* 二维字符数组的元素（`char g[3][3]` 这种棋盘/迷宫）：名字要带两个下标，
+ * 以前只发 `g[0]`（整行指针转 char）—— 画出来是 44/47/50 这种地址低字节，纯属错误数据。 */
+static void __avc_aic2(int line, const char* name, int r, int c, long v)
+{
+    char b[600];
+    __avc_open();
+    sprintf(b, "V|%d|%s[%d][%d]|c|%ld", line, name, r, c, v);
+    __avc_out(b);
+}
+
+/* 指针数组的元素（`HNode* bucket[7]`、`Edge* adj[6]`）：类型标记 'p'。
+ * 值是**地址**不是数据 —— 折成数值数组会把 15278504 这种地址当数据画出来，
+ * 屏幕上就是一堆无意义的巨大数字。折叠层看到 'p' 就不建数值数组层。 */
+static void __avc_aip(int line, const char* name, int idx, unsigned long p)
+{
+    char b[600];
+    __avc_open();
+    sprintf(b, "V|%d|%s[%d]|p|%lu", line, name, idx, p);
+    __avc_out(b);
+}
+
 /* 指针是否已在 BFS 队列里：多指针结构（孩子-兄弟、图十字链）同一结点会被多条边指到，
  * 不去重就会重复入队 → 结点数爆炸、边数翻倍。 */
 static int __avc_ptr_in(void* const* q, int n, const void* p)

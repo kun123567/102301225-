@@ -79,3 +79,38 @@
 @media (max-width: 540px) {
   #detect-panel .detect-run { margin-left: 0; }
 }
+
+/* 「用法」行：栈/队列要高亮，普通数组要弱化（是否栈队列是后端给的结论，不是装饰） */
+#detect-panel .detect-role {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5a6478;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #f4f5f9;
+  justify-self: start;
+}
+
+#detect-panel .detect-role[data-role="stack"] {
+  background: #eef3ff;
+  color: #24438f;
+  border: 1px solid #cfdcf8;
+}
+
+#detect-panel .detect-role[data-role="queue"] {
+  background: #eefaf3;
+  color: #17603f;
+  border: 1px solid #cbead9;
+}
+
+#detect-panel .detect-role[data-role="array"] {
+  background: #f7f8fb;
+  color: #6b7686;
+  border: 1px dashed #e0e5ee;
+}
+
+#detect-panel .detect-role[data-role="structure"] {
+  background: #faf7ff;
+  color: #5b4385;
+  border: 1px solid #e6dcfa;
+}

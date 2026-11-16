@@ -3,6 +3,10 @@
 #ifndef __AVC_COMPAT_STDINT_H
 #define __AVC_COMPAT_STDINT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef signed char        int8_t;
 typedef unsigned char      uint8_t;
 typedef short              int16_t;
@@ -24,4 +28,8 @@ typedef unsigned int       uintptr_t;
 #define INT32_MAX  2147483647
 #define UINT32_MAX 4294967295u
 
+
+#ifdef __cplusplus
+}
+#endif
 #endif /* __AVC_COMPAT_STDINT_H */

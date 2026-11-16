@@ -27,6 +27,9 @@ function svgEl(doc, name, attrs, text) {
 /** 指针三行在宿主里的固定 y（取自它的 MARKERS 常量语义：左/右在上，中在下） */
 const MARKER_Y = { left: 46, right: 46, mid: 26 };
 const MARKER_LABEL = { left: 'L', right: 'R', mid: 'M' };
+/* 自由指针（自定义代码里的 i / j / k / cur …）用的行位：就是上面三条行位本身，
+   只是"没被 L/R/M 占用的那几行"才给它们用 —— 不新增视觉规则，也不改宿主的三行语义。 */
+const FREE_ROWS = [46, 26, 8];
 
 /** 从 plus01&02 的层里取"数组 + 区间 + 指针"；也接受已经是 Step v1 形状的入参 */
 function normalize(input) {
@@ -40,7 +43,10 @@ function normalize(input) {
       mid: input.variables ? input.variables.mid : null,
       event: input.event || 'none',
       result: input.result == null ? null : input.result,
-      pointers: [],
+      /* 宿主原本只有 L/R/M；自定义代码带上来的是任意名字的游标（i / j / k …），
+         它们是 Step v1 之外的**附加字段**，老调用方不带就相当于空数组。 */
+      pointers: Array.isArray(input.pointers) ? input.pointers.map((p) => ({ id: p.id, label: p.label, index: p.index, node: p.node })) : [],
+      focus: Array.isArray(input.focus) ? input.focus : [],
     };
   }
   // ② plus01&02 的 layer（data.values + roles.marks/pointers）
@@ -112,6 +118,14 @@ export function buildArrayFrame(input, opts = {}) {
   const barWidth = spacing * 0.6;
   const midIndex = st.mid;
   const foundIndex = st.event === 'found' ? st.result : null;
+  /* 自定义代码的"这一步动的格子"（引擎给的 focus1）。宿主没有 is-focus，用已有的
+     is-comparing（同色系高亮，见 visualization.css），不加任何新样式。 */
+  const focusSet = new Set((st.focus || []).map(Number).filter((i) => Number.isInteger(i)));
+  /* 只有"自定义代码的步"才带 focus 字段 → 入场/写入动效也只在自定义代码里加。
+     54 个 plus 示例不带这个字段，走的是和以前完全一样的路径（零视觉变化）。 */
+  const customStep = Array.isArray(input && input.focus);
+  const prevArray = customStep && opts.previous && Array.isArray(opts.previous.array) ? opts.previous.array : null;
+  const reducedMotion = Boolean(opts.reduced);   // 尊重"减少动效"；假 DOM 里没有 element.animate，见下面的 typeof 判断
 
   st.array.forEach((value, index) => {
     const x = center(index);
@@ -122,6 +136,7 @@ export function buildArrayFrame(input, opts = {}) {
     if (excluded) cell.classList.add('is-excluded');            // ← 宿主的 .prototype-array-cell.is-excluded
     if (midIndex != null && index === midIndex) cell.classList.add('is-mid');
     if (foundIndex != null && index === foundIndex) cell.classList.add('is-found');
+    if (focusSet.has(index)) cell.classList.add('is-comparing');
 
     const label = String(value);
     const valueLabel = svgEl(doc, 'text', { class: 'prototype-array-value', x, y: value < 0 ? y + 13 : y - 6 }, label);
@@ -142,6 +157,21 @@ export function buildArrayFrame(input, opts = {}) {
     cell.appendChild(svgEl(doc, 'path', { class: 'prototype-array-axis', d: `M ${x} ${zero} v 4` }));
     cell.appendChild(svgEl(doc, 'text', { x, y: 187 }, index));
     chart.appendChild(cell);
+
+    /* 自定义代码：值变了的格子淡入一下（宿主在 prototype-array.js 里对"写入格"用的就是这招：
+       element.animate 的透明度过渡）。首帧按 index 错峰入场，和宿主一致。 */
+    if (customStep && !reducedMotion && typeof cell.animate === 'function') {
+      const prevValue = prevArray && index < prevArray.length ? prevArray[index] : null;
+      const appeared = prevArray ? prevValue == null : true;
+      const changed = prevArray ? prevValue !== value : false;
+      const isFocus = focusSet.has(index);
+      if (appeared || changed || isFocus) {
+        cell.animate(
+          [{ opacity: appeared ? 0.2 : 0.55 }, { opacity: excluded ? 0.4 : 1 }],
+          { duration: appeared ? 260 : 220, easing: 'ease-out', delay: appeared && opts.enter ? (index % 8) * 35 : 0 },
+        );
+      }
+    }
   });
 
   // 指针药丸（宿主的 .prototype-marker.is-left/right/mid + data-ptr 用于 FLIP 量取）
@@ -159,6 +189,33 @@ export function buildArrayFrame(input, opts = {}) {
     marker.appendChild(svgEl(doc, 'text', { x, y: y + 2 }, MARKER_LABEL[side]));
     chart.appendChild(marker);
     pointers.set(side, marker);
+  }
+
+  /* 自由指针（自定义代码的 i / j / k / cur …）：
+     名字不是 L/R/M，所以不能用三行语义；但**药丸本体、配色、FLIP 量取方式完全一样** ——
+     用同一套 .prototype-marker + data-ptr，键换成变量名，宿主那边的指针 FLIP 自动生效
+     （它按 map 的键量旧位置 → 新位置，见 visualization/index.js 的 flipPointers）。
+     行位只在 L/R/M 没用掉的那几行里挑，两个游标落在同一格时上下叠一层。 */
+  const usedRows = new Set(['left', 'right', 'mid'].filter((s) => seen.has(s)).map((s) => MARKER_Y[s]));
+  const freeRows = FREE_ROWS.filter((y) => !usedRows.has(y));
+  const stacked = new Map();
+  for (const p of st.pointers) {
+    if (sideOf(p)) continue;
+    const idx = Number(p.index);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= st.array.length) continue;
+    const key = String(p.id || p.label || 'ptr');
+    if (pointers.has(key)) continue;
+    const row = stacked.get(idx) || 0;
+    stacked.set(idx, row + 1);
+    const y = freeRows[Math.min(row, freeRows.length - 1)];
+    const text = String(p.label == null ? key : p.label);
+    const w = Math.max(16, 10 + text.length * 7);
+    const x = center(idx);
+    const marker = svgEl(doc, 'g', { class: 'prototype-marker is-free', 'data-ptr': key });
+    marker.appendChild(svgEl(doc, 'rect', { x: x - w / 2, y: y - 9, width: w, height: 16, rx: 4 }));
+    marker.appendChild(svgEl(doc, 'text', { x, y: y + 2 }, text));
+    chart.appendChild(marker);
+    pointers.set(key, marker);
   }
 
   return { cells: [chart], pointers };

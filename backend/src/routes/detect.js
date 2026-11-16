@@ -47,6 +47,65 @@ export function handleDetect(request, response, raw, json) {
   }
 }
 
+/* 允许的头文件（与 tests/custom-headers.test.mjs 保持一致）——编译失败时直接告诉用户能用什么 */
+const ALLOWED_HEADERS = 'stdio.h / stdlib.h / limits.h / string.h / math.h / ctype.h / assert.h / time.h / stdbool.h / stdint.h（C++ 另有 cstdio、cstdlib；STL 不可用）';
+
+/* 常见 STL 头缺失 → 给出本地能用的写法（比"编译失败"有用得多） */
+const STL_HINTS = {
+  vector: '用定长数组 `T name[N]`（或 `malloc`）代替 vector<T>，长度自己用变量记',
+  string: '用 `const char*` + `#include <string.h>` 里的 strlen/strcpy/strcmp 代替 string',
+  queue: '用数组 + front/rear 两个下标自己写队列（前端会把它画成队列视图）',
+  stack: '用数组 + top 下标自己写栈（前端会把它画成栈视图）',
+  map: '用两个平行数组（键数组 + 值数组）或线性查找代替 map',
+  iostream: '用 `#include <stdio.h>` 的 printf/scanf 代替 iostream',
+  algorithm: '排序自己写（插入/冒泡/快排都可以），`sort` 不提供',
+  cstring: '改成 `#include <string.h>`（C 版本可用）',
+  cmath: '改成 `#include <math.h>`（C 版本可用）',
+};
+
+/**
+ * 把 traceProgram 的失败结果翻成一句人话（带行号）。
+ * 之前 422 只回 `{ok:false, stage, log, diags}`，前端只认 `error.message`，
+ * 于是用户在页面上只看到"请求失败（422）"，看不到真正的编译错误。
+ */
+export function describeTraceFailure(result) {
+  const stage = result && result.stage;
+  const diags = (result && result.diags) || [];
+  const first = diags.find((d) => d && d.sev === 'error') || diags[0];
+  if (stage === 'compile' && first) {
+    const head = first.line ? '第 ' + first.line + ' 行：' : '';
+    const missing = /unable to open '([^']+)'/i.exec(String(first.message || ''));
+    if (missing) {
+      const header = missing[1];
+      const base = String(header).replace(/\.h$/, '');
+      const hint = STL_HINTS[header] || STL_HINTS[base] || '';
+      return head + first.message
+        + '　—— 本地工具链没有这个头文件：' + header + '。'
+        + (hint ? hint + '。' : '')
+        + '可用：' + ALLOWED_HEADERS;
+    }
+    const cppAsC = /misspelled data type near '(class|namespace|template|bool)'|'class' has not been declared|unexpected token.*class/i.test(String(first.message || ''));
+    if (cppAsC) {
+      return head + first.message + '　—— 这段代码是 C++，本地已尝试按 C++ 重编；若仍失败，请检查是否用了 STL（vector/string/map…）。';
+    }
+    return head + String(first.message || '编译失败。');
+  }
+  if (stage === 'instrument') {
+    const raw = String(result.log || '').trim();
+    return raw || '插桩版本编译失败：这段代码用了插桩暂不支持的写法（可先看静态识别结果）。';
+  }
+  if (stage === 'toolchain') return String(result.log || '未找到本机工具链。');
+  const lines = String((result && result.log) || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2);
+  return lines.join(' ') || '编译失败。';
+}
+
+function failureCode(stage) {
+  if (stage === 'instrument') return 'INSTRUMENT_FAILED';
+  if (stage === 'toolchain') return 'COMPILER_UNAVAILABLE';
+  if (stage === 'link') return 'LINK_ERROR';
+  return 'COMPILE_ERROR';
+}
+
 export async function handleDetectTrace(request, response, raw, json) {
   if (localOnly(request, response, json)) return;
   const body = parseBody(raw, response, json);
@@ -59,7 +118,12 @@ export async function handleDetectTrace(request, response, raw, json) {
       stdin: body.stdin,
       withLayers: Boolean(body.withLayers),
     });
-    return json(response, result.ok ? 200 : 422, result);
+    if (result.ok) return json(response, 200, result);
+    /* 失败也要把细节带回去：错误消息给 UI，diags/log 留给控制台与测试 */
+    return json(response, 422, {
+      ...result,
+      error: { code: failureCode(result.stage), message: describeTraceFailure(result) },
+    });
   } catch (error) {
     return json(response, 400, { error: { code: 'TRACE_FAILED', message: error.message } });
   }

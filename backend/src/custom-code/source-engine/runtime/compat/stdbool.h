@@ -4,6 +4,10 @@
 #ifndef __AVC_COMPAT_STDBOOL_H
 #define __AVC_COMPAT_STDBOOL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef __cplusplus
 #ifndef bool
 #define bool int
@@ -17,4 +21,8 @@
 #define __bool_true_false_are_defined 1
 #endif /* !__cplusplus */
 
+
+#ifdef __cplusplus
+}
+#endif
 #endif /* __AVC_COMPAT_STDBOOL_H */

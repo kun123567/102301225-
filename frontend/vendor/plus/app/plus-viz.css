@@ -107,11 +107,22 @@
 
 /* 尊重系统"减少动态效果" */
 @media (prefers-reduced-motion: reduce) {
-  .avc-pos,
-  .avc-el { transition: none; }
-  .avc-el.avc-enter,
-  .avc-el.avc-exit,
-  .avc-el.avc-flash { animation: none; }
+  /* 只关"位移/缩放"，**保留透明度变化**（全关掉会让整幅图像没有动画） */
+  .avc-pos { transition: none; }
+  .avc-el { transition: opacity 200ms ease; }
+  .avc-el.avc-enter { animation: avc-fade-kf 220ms ease-out; }
+  .avc-el.avc-flash { animation: avc-flash-kf 320ms ease-in-out 1; }
+  .avc-el.avc-exit { animation: avc-fadeout-kf 200ms ease-in forwards; }
+}
+
+@keyframes avc-fade-kf {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes avc-fadeout-kf {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -157,3 +168,14 @@
   .input-panel.plus-input { grid-template-columns: minmax(0, 1fr); }
   #plus-input-fields { grid-template-columns: minmax(0, 1fr); padding: 10px; }
 }
+
+/* ---------------------------------------------------------------------------
+ * 自由指针（自定义代码的 i / j / k / cur …）
+ *
+ * 只新增选择器 `.prototype-marker.is-free` —— 它只由 vendor/plus/app/host-frame.js
+ * 在本项目自己的数组帧里发射，宿主的 L/R/M 三行语义与既有配色一个字节都没动。
+ * 用"信息色"（蓝）而不是 L/R/M 的语义色，是为了让"这一格被谁指着"和
+ * "二分查找的左/右/中点"在视觉上不混为一谈。
+ * ------------------------------------------------------------------------- */
+.prototype-marker.is-free { --marker-text: #0b5cad; --marker-bg: #e7f1fd; }
+.prototype-marker.is-free text { font-size: 10px; }

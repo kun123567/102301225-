@@ -147,3 +147,136 @@ if (a) { int _avc_pa; for (_avc_pa = 0; _avc_pa < (n) && _avc_pa < 24; _avc_pa++
   （Watcom 会把 BOM 报成非法字符）。
 - 实测：`ok:true` / `degradedMode:'full'` / **312 步 / 1690 事件** / `layerRun.style=3` / `families=['list']`，
   再经 vendor 的 svg-stage 渲染 40 步无异常、DOM 元素数 ≥ 图元数。
+
+## 允许哪些库（实测清单，见 tests/custom-headers.test.mjs）
+
+工具链自带的 Watcom 头文件是**裁剪版**（只有 `stdio.h`/`stdlib.h`/`limits.h` + C++ 的 `cstdio`/`cstdlib`），
+但 `clib3r.lib` / `math387r.lib` 里的函数符号是齐的。所以本项目用 `source-engine/runtime/compat/` 补了**声明垫片**
+（只声明、不实现，全部带 `extern "C"`），C 与 C++ 都能用：
+
+| 头文件 | 来源 | 典型可用函数 |
+| --- | --- | --- |
+| `stdio.h` / `stdlib.h` / `limits.h` | 工具链自带 | printf/puts/sprintf/scanf/fopen/fgets、malloc/free/calloc/realloc、atoi/atof/abs/labs、qsort、rand/srand、exit/abort/getenv/system |
+| `stdbool.h` / `stdint.h` | 本项目垫片 | `bool/true/false`、`int8_t…uint64_t`、`INT32_MAX` 等 |
+| `string.h` | 本项目垫片 | strlen strcpy strncpy strcat strncat strcmp strncmp strchr strrchr strstr strpbrk strtok memcpy memmove memset memcmp memchr |
+| `math.h` | 本项目垫片 | sqrt pow fabs fmod sin cos tan asin acos atan atan2 sinh cosh tanh exp log log10 floor ceil ldexp frexp modf hypot + `M_PI` |
+| `ctype.h` | 本项目垫片 | isalnum isalpha iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit tolower toupper |
+| `assert.h` | 本项目垫片 | `assert(expr)`（NDEBUG 时失效；失败打印 文件:行 后 abort） |
+| `time.h` | 本项目垫片 | time clock difftime mktime ctime localtime gmtime strftime（时区细节不保证） |
+
+**不可用**（实测 `unable to open`）：`iostream`、`vector`、`algorithm`、`queue`、`stack`、`map`、`cstring`、`cmath`、
+`stddef.h`、`stdarg.h`、`malloc.h`、`conio.h`、`errno.h`；C++ 的 `std::string` / `std::vector` / `std::queue` / `std::map` 全部不可用。
+
+注意：C++ 里 `#include <string>` **能编过**，但命中的是本项目的 C 垫片（拿到 C 字符串函数），
+不是 STL 的 `std::string` —— 写 `std::string s;` 会报 `'std::string' has not been declared`。
+
+## 每步指针 / 聚焦（"动画跟着执行走"，见 tests/engine-layers.test.mjs 第 8 节）
+
+`layers[].roles` 现在除了 `focus1` 还会带 `pointers`，让渲染端的指针药丸**每步真的换位置**：
+
+```
+数组： roles.pointers = [{ id:'j', label:'j', index:2 }]      ← 用格子下标定位
+链表/树：roles.pointers = [{ id:'cur', label:'cur', node:'n1' }] ← 用结点 id 定位
+```
+
+判据全部来自用户代码本身，**没有名字表**（否则换个写法就漏，和"识别任意组合"冲突）：
+
+| 判据 | 为什么 | 反例（必须不画） |
+| --- | --- | --- |
+| 全文里被当成下标用过（`a[i]` 的 `i`），且出现在**当前这一行** | 这是"下标"的直接证据 | `sum += a[i]` 里的 `sum` |
+| 当前行是 `for` / `while` 头 → 头里的标量都算计数器 | `for (j = 0; j < n-1-i; j++)` 的 `i` 只出现在条件里 | 长度标量 `n/len/size/count/front`（`LEN_DIRECT`） |
+| 链表/树：各指针变量 dump 出来的**链头地址**对到本层结点地址上 | 插桩对每个指针变量各 dump 一条链，链头就是它指的位置 | 指针变 NULL（`LE count=0`）后不能还挂在旧结点 |
+
+前端接线（`frontend/vendor/plus/app/host-frame.js`）：
+
+- 名字是 `l/lo/left`、`r/hi/right`、`m/mid` 的仍走宿主三条语义行（L/R/M，零改动）；
+- 其余名字用**同一套** `.prototype-marker` + `data-ptr=<变量名>`，只多一个 `is-free` 修饰类
+  （配色在 `plus-viz.css`，只新增选择器），因此宿主的指针 FLIP（按 map 键量旧位置 → 新位置）直接生效；
+- 本步改的格子加宿主已有的 `is-comparing`，并对"值变了的格子"做 `element.animate` 透明度过渡
+  —— 与宿主 `prototype-array.js` 对写入格的做法一致；
+- 这两处只在**带 `focus` 字段的步**（即自定义代码）里启用，54 个 plus 示例的代码路径一个字节都没变。
+
+实测（冒泡 6 个元素）：49 步里 48 步有指针药丸，指针布局有 27 种不同组合（`j@0` → `j@2` → `i@0+j@0` …），
+`t` 这类暂存值从不出现；链表样例 310 步全部带指针，`cur` / `newNode` / `head` 各自落在对的结点上。
+
+## 类成员函数 / 多路结构（`class Trie` 这一类，见 tests/cpp-class.test.mjs）
+
+力扣那种 `class Trie { Trie* children[26]; bool isEnd; void insert(...) {...} }` 原来只画出一张
+"6 个结点摆一圈"的图，原因有三个，都修了：
+
+| 问题 | 以前 | 现在 |
+| --- | --- | --- |
+| 成员函数体没插桩 | `parseFunctions` 把整个结构体区间跳过 → `insert` 里一条语句都不插，只有 `main` 里一次 dump | 类体"直接子层"（`depthAt == 类体深度+1`）也当函数定义；变量收集与语句插桩都放行（`!inStruct(i) \|\| insideFn(i)`） |
+| dump 原型排在类后面 | 成员函数体里调用 `__avc_dump_Trie` 时原型还没出现 → `E029`，整条 full 链路失败并**静默降级**到 no-dump（屏幕上什么结构都没有） | 参数写 `struct Tag*` 的原型在文件头再前置声明一次（C/C++ 允许重复声明）；降级时前端会明说"插桩已降级" |
+| 结点标签 / 布局没语义 | `NE` 先建结点时用下标当标签 → 全是 0,1,2,3；`layout:'circle'` 把 `a→p→p→l→e` 画成圆环 | 多路 walker 补发 `NM|var|idx|slot=k`（子结点挂在父结点指针数组第几格）与 `NM|var|idx|addr=<地址>`；槽位 + 源码里的 `- 'a'` 基准字符 → 结点直接标成字母；父子关系成树时按**层序坐标**摆（root 在上、孩子在下），只一条链就横着排（`layout:'line'`），不成树（有环/多父）才回到圆环 |
+
+顺带：`addr` 让多路结构也能画指针 —— `node` 走到哪个结点，靠"该变量本轮 dump 的链头地址"对上结点地址，
+所以 Trie 里 `node` / `t` 两个药丸会随 `insert` 一步步往下走。
+
+实测（官方题解 Trie，插入 "apple" + "app"）：插桩 `full` 成功、**272 步**（原来 21 步）、**每步只剩 1 张卡**、
+`graph:t` 结点标签 `#0 a p p l e`（`sub` 是槽位 `#0 #15 #15 #11 #4`）、`layout=line`（整棵是一条链）、
+最后一步指针 `node→v3`、`t→v0`，`node` 一共走过 5 个不同结点；
+分叉版（app/bat/cap）10 个结点按层展开：root(0.50,0) → 三个孩子 x=0/0.5/1 (y=0.33) → 叶子 (y=1)；
+有环的邻接结构仍是 `layout=circle`（判据不成立就不硬套树布局）。
+
+去重/折叠的三条规则（`dedupeStructures` + `pruneSubsetStructures`，都在 engine-layers.js）：
+
+| 情形 | 处理 |
+| --- | --- |
+| `this:Trie` 与 `t` 是同一个对象（结点地址序列与边完全一致） | 只留一张，名字用**用户自己的变量**（`t`），`this` 的指针药丸并过去；同结点上只留一个标签 |
+| `node` 的链是 `t` 的链的一段（地址集合是真子集） | 扔掉小卡，把 `node` 药丸按地址映射到大卡的对应结点上 |
+| 两边地址没发全（早期步骤） | 不合并 —— 证明不了是同一批结点就不动 |
+
+（这也顺手治了之前"链表样例每步 3～8 张卡"的问题：样例从 3～8 张降到 1～6 张，`head`/`cur` 落在同一张图上。）
+
+
+
+## 类的成员数组 / 力扣 MinStack 那一类（见 tests/engine-layers.test.mjs 第 9 节）
+
+力扣官方 MinStack 用的是 `std::stack<int>` 与 `std::min`，**本工具链没有 STL**（`<stack>`、`<algorithm>` 都 `unable to open`），
+必须换成本项目的写法才能跑。替换关系（算法一字未改，只换容器/工具函数）：
+
+| 原写法 | 改成 | 为什么 |
+| --- | --- | --- |
+| `stack<int> x_stack; stack<int> min_stack;` | `int data[64]; int mins[64]; int top;` | 没有 STL；两个栈 push/pop 同步，共用一个栈顶就够 |
+| `min_stack.push(INT_MAX)` 当哨兵 | 用 `top < 0` 判空，空栈的最小值就是 x 自己 | 不需要哨兵，也不用 `limits.h` |
+| `min(a, b)` | 手写 `if (x < m) { m = x; }` | `<algorithm>` 不可用 |
+| `int top()` 方法 | 改名 `topValue()` | 成员 `top` 与新方法名撞车（C++ 不允许同名字段与方法） |
+| 只有类、没有 `main` | 补 `main` + 一串 push/pop/printf | 自定义代码的整程序模式要 `int main(void)` |
+
+插桩这边为此补了一条通用能力：**类的成员数组**会被插桩成带点的名字（`s.data[3]` / `s.top`），
+所以 `ARRAY_ELEMENT_RE` 允许点号，长度/游标/栈队列判定都按**最后一段**匹配（`tailName`），
+否则 `int data[64] + int top` 这种"成员栈"一辈子都裁不出实际元素、也画不出来。
+
+实测（本文件样例）：`full` 插桩成功、20 步、每步 2 张卡（`stack:s.data` / `stack:s.mins`，竖版栈视图），
+push -2 / 0 / -3 后两个栈是 `[-2,0,-3]` 与 `[-2,-2,-3]`，pop 一次回到 `[-2,0]` 与 `[-2,-2]`，
+`top=1` 指向最后一个元素、`focus1` 高亮栈顶；输出 `-3 / 0 / -2` 与题解一致。
+（限制：数组声明长度按 16 元素采样，声明 64 格时只 dump 前 16 格。）
+## 可视化覆盖面审计（`npm run audit:viz`）
+
+`scripts/custom-viz-audit.mjs` 用**一批互不相同的程序**（20 个案例）真编译 + 插桩 + 折叠，逐条检查：
+能否出图、卡片类型对不对、有没有"声明长度泄漏"、有没有把未初始化栈垃圾或地址当数据摆出来、
+指针药丸是否真的在动、程序输出是否仍然正确。案例只声明客观事实（程序打印什么、几步、该看到哪类卡），
+**不声明变量叫什么名字** —— 换个命名还成立，才说明是自适应识别。
+
+2026-11 这一轮扫出并修掉的（都是"看不见/看错"，不是样式问题）：
+
+| 病症 | 根因 | 修法 |
+| --- | --- | --- |
+| 二维数组（矩阵转置、邻接矩阵、棋盘）**完全不出图** | 折叠层只认 `a[i]`，`a[i][j]` 连正则都不匹配 | 新增二维事件通道 → style 2 矩阵层；未初始化/未 dump 到的格子写 `·`，不把栈垃圾当数据 |
+| 字符数组显示成 `104 101 108 108 111` | 元素按 int 发，看不出是 `hello` | 元素按声明类型标 `'c'` → 格子显示成字符；尾部 `\0` 裁掉 |
+| 二维字符数组显示成**地址低字节**（44/47/50） | 只发 `g[i]`（整行指针转 char） | 按 `g[i][j]` 发，走矩阵层按字符显示 |
+| 结构体数组（`Item a[4]` 排序）**整段 0 张卡** | 字段伪变量生成成 `a.key`——非法 C，插桩版编不过 → 降级 trace-only | 按元素展开成 `a.key[k]` / `a[0].key`；"key 列怎么移动"能一格格看 |
+| 指针数组（`HNode* bucket[7]`、`Edge* adj[6]`）被画成一排**地址** | 元素按 `(long)` 发，折叠层当数值数组 | 类型标记 `'p'`，折叠层不建数值数组层（链已由 list/graph 层画） |
+| 画面上出现 `4208300` / `1777952` 这类**未初始化垃圾** | 定长数组按声明长度 dump，只写了前几格 | 中间未写格写 `?`（柱高按 0），矩阵写 `·`；尾部仍按垃圾/长度规则裁 |
+| 自定义代码跑 Trie/链表时标题写着"数组视图" | 窗口标题在 run 之前就固定成数组语义 | 按 `run.structure` 重挂标题与图例（结构视图／数组视图） |
+
+顺手把"长度推断"从纯名字表改成两条腿：名字线索（`top/n/len…`）优先，**没有线索时用"写过的最大下标 + 1"**
+（数据驱动）—— 所以 `int a[64]` 只写前 3 格时也只画 3 格，不靠变量名。
+
+仍然保留的启发式（都是"读不出来就只能退化"，不是按案例写死）：
+
+- 长度标量名字表 `LEN_DIRECT / LEN_PLUS_ONE`（`n/len/size/count/num/front`、`top/sp/rear/tail`）：不匹配就退到"写过的最大下标"。
+- 栈/队列视图按 `top|sp` / `front+rear|head+tail` 判；都不叫这些名字时按普通数组画（仍能看值）。
+- 垃圾判定 `|v| > 1e6`；字符基准只认唯一的 `- 'a'` 或 32..126 的数字字面量。
+- 采样上限：一维数组 16 格、二维每维 16、结点 32、边 48（超出部分不采，不静默改数据结构）。

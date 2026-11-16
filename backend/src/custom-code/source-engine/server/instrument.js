@@ -88,7 +88,8 @@ function parseFieldDecls(text, selfNames) {
 function parseStructs(codeLines) {
   const structs = [];
   for (let i = 0; i < codeLines.length; i++) {
-    const m = codeLines[i].match(/\b(struct|union)\s+([A-Za-z_]\w*)?\s*\{/);
+    /* C++ 的 class 与 struct 在这里等价（只是默认可见性不同），一起认才能画 Tries / 链表类 */
+      const m = codeLines[i].match(/\b(struct|union|class)\s+([A-Za-z_]\w*)?\s*\{/);
     if (!m) continue;
     const tag = m[2] || ('anon' + i);
     let j = i, depth = 0, bodyStart = -1, end = -1;
@@ -105,13 +106,25 @@ function parseStructs(codeLines) {
     const alias = after ? after[1] : null;
     const selfNames = new Set([tag, alias].filter(Boolean));
     const fields = [];
+    /* 类体里除了数据成员，还有 public:/private: 与**成员函数体**。
+       早期把函数体里的局部变量（i / j …）也当成字段，dump 代码就会去访问 p->i，
+       插桩版直接编不过（表现是"回退到 no-dump，图上什么都没有"）。
+       所以：只取类体第一层的声明，跳过访问修饰符与含函数体的行。 */
+    let memberDepth = 0;
     for (let k = bodyStart; k <= end; k++) {
       let seg = codeLines[k];
       if (k === bodyStart) seg = seg.slice(seg.indexOf('{') + 1);
       if (k === end) seg = seg.slice(0, seg.lastIndexOf('}'));
-      for (const piece of seg.split(';')) {
-        for (const f of parseFieldDecls(piece, selfNames)) fields.push(f);
+      const trimmed = seg.trim();
+      const opens = (seg.match(/\{/g) || []).length;
+      const closes = (seg.match(/\}/g) || []).length;
+      if (memberDepth === 0 && trimmed && !/^(?:public|private|protected)\s*:/.test(trimmed) && !/\(/.test(seg)) {
+        for (const piece of seg.split(';')) {
+          for (const f of parseFieldDecls(piece, selfNames)) fields.push(f);
+        }
       }
+      memberDepth += opens - closes;
+      if (memberDepth < 0) memberDepth = 0;
     }
     if (!fields.length) continue;
     const selfFields = fields.filter(f => f.self);                 // 所有自引用字段（含指针数组）
@@ -151,13 +164,26 @@ function parseStructs(codeLines) {
   return structs;
 }
 
-/** 找函数定义（名字 + 函数体行区间） */
-function parseFunctions(codeLines, structRanges) {
+/** 找函数定义（名字 + 函数体行区间）
+ *
+ * `inClass` 传 true 时，**类/结构体里定义的成员函数**也要找到（`Trie::insert` 那种写法，
+ * 以及直接写在 class 里的 `void insert(...) { ... }`）。
+ * 为什么必须找：以前整个结构体区间一律跳过，于是成员函数体里的语句一条都不插桩 ——
+ * 力扣那种 `class Trie { ... void insert(...) {...} }` 跑出来只有 main 里的一次 dump，
+ * 屏幕上就是一张永远不变的图（"空空如也"的根因）。
+ */
+function parseFunctions(codeLines, structRanges, depthAt) {
   const inStruct = (i) => structRanges.some(r => i >= r.start && i <= r.end);
+  /** 这一行是不是类的"直接子层"（= 成员函数签名所在层，而不是函数体内部） */
+  const atClassBody = (i) => {
+    const r = structRanges.find((x) => i >= x.start && i <= x.end);
+    if (!r || !depthAt) return false;
+    return depthAt[i] === depthAt[r.start] + 1;
+  };
   const fns = [];
   const skipKw = /^(if|for|while|switch|return|else|do|case|default|typedef|struct|union|enum|sizeof|goto|break|continue)\b/;
   for (let i = 0; i < codeLines.length; i++) {
-    if (inStruct(i)) continue;
+    if (inStruct(i) && !atClassBody(i)) continue;
     const line = codeLines[i];
     if (!line.match(/\([^;]*\)\s*\{?\s*$/) && !line.match(/\([^;]*\)\s*$/)) continue;
     if (line.trim().startsWith('#') || skipKw.test(line.trim())) continue;
@@ -185,7 +211,13 @@ function parseFunctions(codeLines, structRanges) {
     }
     if (end < 0) continue;
     const params = (line.match(/\(([^)]*)\)/) || [])[1] || '';
-    fns.push({ name: nm[1], start: i, bodyLine, end, params: params.trim(), ret: line.split(nm[1])[0].trim() });
+    /* 成员函数记下"属于哪个类/结构体"：这样函数体里就能用 `this` 把整个对象 dump 出来
+       （`class Trie` 的 insert 里，`this` 就是根结点 —— 不 dump 它，插入过程中根本看不到整棵树） */
+    const owner = structRanges.find((r) => i >= r.start && i <= r.end);
+    fns.push({
+      name: nm[1], start: i, bodyLine, end, params: params.trim(), ret: line.split(nm[1])[0].trim(),
+      owner: owner ? owner.ref : null,
+    });
     i = end;
   }
   return fns;
@@ -422,10 +454,19 @@ function watchCalls(line, v) {
   if (v.kind === 'd') return [`__avc_vd(${L},${q(n)},(double)(${expr}));`];
   if (v.kind === 's') {
     // 字符数组：既发整串（变量窗可读），也发逐下标（数组窗要按 a[i] 聚格）
+    /* 逐下标发的是**字符**（类型标记 'c'）：只看数字的话，`"hello"` 会画成
+       104/101/108/108/111，学生根本认不出这是字符串。类型标记来自声明，不是猜的。 */
     const calls = [`__avc_vs(${L},${q(n)},${expr});`];
-    if (v.dims && v.dims.length) {
+    if (v.dims && v.dims.length === 1) {
       for (let i = 0; i < v.dims[0]; i++) {
-        calls.push(`__avc_vi(${L},${q(n + '[' + i + ']')},(long)(unsigned char)(${expr}[${i}]));`);
+        calls.push(`__avc_aic(${L},${q(n)},${i},(long)(unsigned char)(${expr}[${i}]));`);
+      }
+    } else if (v.dims && v.dims.length >= 2) {
+      /* 二维字符数组（棋盘/迷宫）：必须发 `g[i][j]`，只发 `g[i]` 是把整行指针当字符，纯错误数据 */
+      for (let i = 0; i < v.dims[0]; i++) {
+        for (let j = 0; j < v.dims[1]; j++) {
+          calls.push(`__avc_aic2(${L},${q(n)},${i},${j},(long)(unsigned char)(${expr}[${i}][${j}]));`);
+        }
       }
     }
     return calls;
@@ -515,12 +556,22 @@ function genDump(structs) {
       const edges = [];
       for (const f of (s.selfFields || [])) {
         if (f.isArray) {
-          edges.push(`        for (_avc_k = 0; _avc_k < 8; _avc_k++) { ${ct}* _avc_c = p->${f.name}[_avc_k];` +
+          /* 指针数组的探测长度：按**声明维度**来（上限 32），不要写死 8。
+             Trie 的 children[26] 里 'p' 落在下标 15，写死 8 会让整棵树只走两层。 */
+          const declaredSpan = (() => {
+            const digits = String(f.array || '').match(/\d+/);
+            return digits ? Number(digits[0]) : 0;
+          })();
+          const span = declaredSpan ? Math.min(declaredSpan, 32) : 8;
+          edges.push(`        for (_avc_k = 0; _avc_k < ${span}; _avc_k++) { ${ct}* _avc_c = p->${f.name}[_avc_k];` +
             ` if (_avc_c && __avc_ptr_ok(_avc_c) && qn < 64 && !__avc_ptr_in(q, qn, _avc_c))` +
-            ` { __avc_edge(var, i, qn, "${f.name}"); q[qn++] = (void*)_avc_c; } }`);
+            /* slot= 记"这个子结点挂在父结点指针数组的第几格"：
+               Trie 的 children[15] 就是字母 'p'（若程序里是 c - 'a'），
+               没有它就只剩"第几个结点"，画出来的树没有任何语义。 */
+            ` { __avc_edge(var, i, qn, "${f.name}"); __avc_metai(var, qn, "slot", (long)_avc_k); q[qn++] = (void*)_avc_c; } }`);
         } else {
           edges.push(`        if (p->${f.name} && __avc_ptr_ok(p->${f.name}) && qn < 64 && !__avc_ptr_in(q, qn, p->${f.name}))` +
-            ` { __avc_edge(var, i, qn, "${f.name}"); q[qn++] = (void*)p->${f.name}; }`);
+            ` { __avc_edge(var, i, qn, "${f.name}"); __avc_metai(var, qn, "slot", (long)-1); q[qn++] = (void*)p->${f.name}; }`);
         }
       }
       protos.push(`static void __avc_dump_${tag}(const char* var, ${ct}* root);`);
@@ -533,6 +584,9 @@ function genDump(structs) {
         `        ${ct}* p = (${ct}*)q[i];\n` +
         `        if (!__avc_ptr_ok(p)) { i++; continue; }\n` +
         `        __avc_n(var, i, (long)(${key}));\n` +
+        /* 结点真实地址：链表/树靠它把"指针变量指到哪个结点"对上（L 事件里带地址，图这里也要带，
+           否则 Trie 这类多路结构只能各画一张卡，看不出 node 走到哪了）。 */
+        `        __avc_metai(var, i, "addr", (long)(unsigned long)p);\n` +
         metaCall(s, 'i', 'p') +
         edges.join('\n') + '\n' +
         `        i++;\n    }\n` +
@@ -636,11 +690,9 @@ function instrument(source, opt) {
   const structs = parseStructs(code);
   const defines = collectDefines(code);
   const typeSet = typeNameSet(code);
-  const structRanges = structs.map(s => ({ start: s.start, end: s.end }));
-  const fns = parseFunctions(code, structRanges);
-  const inStruct = (i) => structRanges.some(r => i >= r.start && i <= r.end);
+  const structRanges = structs.map(s => ({ start: s.start, end: s.end, ref: s }));
 
-  // 作用域按花括号层级粗略估算
+  // 作用域按花括号层级粗略估算（parseFunctions 需要它来区分"类体直接子层"和"成员函数体内"）
   const depthAt = (() => {
     const d = new Array(code.length).fill(0);
     let cur = 0;
@@ -654,11 +706,18 @@ function instrument(source, opt) {
     return d;
   })();
 
+  const fns = parseFunctions(code, structRanges, depthAt);
+  const inStruct = (i) => structRanges.some(r => i >= r.start && i <= r.end);
+  /** 是否在某个函数体内部（含成员函数） */
+  const insideFn = (i) => fns.some(f => i > f.bodyLine && i < f.end);
+
   // 收集变量：全局 + 各函数体首层
   const vars = [];
   const globals = [];
   for (let i = 0; i < code.length; i++) {
-    if (inStruct(i)) continue;
+    /* 结构体/类的"成员声明区"跳过；但**成员函数体内部**要照常收集局部变量
+       （`Trie* node = this;` / `int ch = ...` 全在这里，不收集就没有每一步的值） */
+    if (inStruct(i) && !insideFn(i)) continue;
     const line = code[i];
     if (!/;\s*$/.test(line)) continue;
     if (/^\s*#/.test(line)) continue;
@@ -691,7 +750,31 @@ function instrument(source, opt) {
        */
       const pureDeclLine = astLib.isDeclLine(String(code[i] || '').trim()) ||
         declWithInit(String(code[i] || '').trim(), typeSet);
-      if (rec.kind === 'struct' && st && d.kind !== 'ptr2' && pureDeclLine) {
+      /* 结构体**数组**（`Item a[4]`）：字段要按下标展开成 `a.key[0..]` / `a[0].key`。
+         以前一律生成 `a.key` —— 那是非法 C（'.' 左边不是结构体），插桩版直接编不过，
+         整段代码降级到 trace-only，屏幕上 0 张卡（"结构体数组排序"这类题就是这样变空的）。 */
+      if (rec.kind === 'struct' && st && rec.dims && rec.dims.length && d.kind !== 'ptr2' && pureDeclLine) {
+        const count = Math.min(rec.dims[0] || 0, 16);
+        for (const f of (st.fields || [])) {
+          if (f.isPtr || f.isArray) continue;                 // 指针/数组字段塞不进单条 V 事件
+          const isNum = INT_TYPES.test(f.type);
+          const isFloat = /^(float|double)$/i.test(String(f.type || '').trim());
+          if (!isNum && !isFloat) continue;
+          for (let k = 0; k < count; k++) {
+            const frec = {
+              /* 名字用 `a.key[k]`：数组窗按 base 聚格，于是"排序时 key 列怎么动"能一格格看 */
+              name: rec.name + '.' + f.name + '[' + k + ']',
+              fieldOf: rec.name + '[' + k + ']', fieldName: f.name,
+              kind: isFloat ? 'd' : 'i', dims: null,
+              declLine: rec.declLine, scopeStart: rec.scopeStart, scopeEnd: rec.scopeEnd,
+              struct: null, structTag: null,
+            };
+            (fn ? vars : globals).push(frec);
+          }
+        }
+        continue;
+      }
+      if (rec.kind === 'struct' && st && !(rec.dims && rec.dims.length) && d.kind !== 'ptr2' && pureDeclLine) {
         for (const f of (st.fields || [])) {
           if (f.isPtr) continue;
           const base = {
@@ -792,6 +875,14 @@ function instrument(source, opt) {
 
   // 头部
   out.push('#include "avctrace.h"');
+  /* 插桩要读用户结构体的成员来出结点图，但 C++ 的 private/protected 会挡住这些读取
+     （报 E148: access to private member 'X::y' is not allowed）。
+     这里在 C++ 下把可见性放开 —— 只为"能画出来"，不改变用户代码的运行行为；
+     C 代码不受影响（#ifdef __cplusplus 包住）。 */
+  out.push('#ifdef __cplusplus');
+  out.push('#define private public');
+  out.push('#define protected public');
+  out.push('#endif');
   // 运行期数组长度：静态变量用"变量名"命名，任何函数里都能安全引用（不必知道 n 的作用域）
   const lenSyms = {};
   for (const v of allVars) {
@@ -802,6 +893,15 @@ function instrument(source, opt) {
   // dump 原型引用了 struct Tag，必须放在 struct 定义之后
   const protoAt = structs.length ? Math.max.apply(null, structs.map(s => s.end)) + 1 : 0;
   let protosEmitted = dumps.protos.length === 0;
+
+  /* 成员函数（class 里直接定义的方法）会在 **类体内部** 调用 dump —— 那时"struct 定义之后"
+     的那份原型还没出现，Watcom 会报 `E029: symbol '__avc_dump_X' has not been declared`。
+     所以：参数写的是 `struct Tag*` 的原型（命名 tag，可以只前置声明）额外在文件头再声明一次。
+     C/C++ 都允许重复声明，后面 protoAt 处那份保持不动，原有布局零影响；
+     用 typedef 别名的匿名单（`typedef struct {…} Node;`）没法前置声明，仍留在原位置。 */
+  for (const p of dumps.protos) {
+    if (/struct\s+[A-Za-z_]\w*\s*\*/.test(p)) out.push(p);
+  }
 
   for (let i = 0; i < raw.length; i++) {
     if (!protosEmitted && i >= protoAt) {
@@ -871,7 +971,7 @@ function instrument(source, opt) {
       balanced(trimmed) &&
       !startsWithContinuation &&
       prevBoundary &&
-      !inStruct(i) &&
+      (!inStruct(i) || insideFn(i)) &&          // 类体里只插桩成员函数体内部
       !fns.some(f => f.start === i);
 
     // 排除纯控制头（无分号的行已由上面过滤）
@@ -918,13 +1018,14 @@ function instrument(source, opt) {
           const setLen = (inFn && inFn.name === v.declFn) ? `${lenSyms[v.name]} = (int)(${v.lenExpr}); ` : '';
           watches.push(`${setLen}if (${v.name}) { int _avc_i;` +
             ` for (_avc_i = 0; _avc_i < ${lenSyms[v.name]} && _avc_i < 16; _avc_i++)` +
-            ` __avc_ai(${lineNo},"${v.name}",_avc_i,(long)${v.name}[_avc_i]); }`);
+            ` __avc_aip(${lineNo},"${v.name}",_avc_i,(unsigned long)${v.name}[_avc_i]); }`);
         } else if (v.kind === 'parr') {
-          // 指针数组（哈希桶 ht[7]）：逐元素发 V 事件（名字 ht[i]），由数组窗聚合成"桶表"。
-          // 以前它被当成单个结点 dump（__avc_dump_HNode("ht", ht)），把 7 个桶首指针当成一个结点走。
+          // 指针数组（哈希桶 ht[7]、邻接表 adj[6]）：逐元素发**地址**（类型标记 'p'）。
+          // 以前它被当成单个结点 dump，把 7 个桶首指针当成一个结点走；
+          // 现在则要小心另一头：把地址当数组值画出来就是 15278504 这种无意义数字，折叠层见 'p' 不建数组层。
           const n = Math.min((v.dims && v.dims[0]) || 8, 16);
           const calls = [];
-          for (let k = 0; k < n; k++) calls.push(`__avc_ai(${lineNo},"${v.name}",${k},(long)${v.name}[${k}]);`);
+          for (let k = 0; k < n; k++) calls.push(`__avc_aip(${lineNo},"${v.name}",${k},(unsigned long)${v.name}[${k}]);`);
           watches.push(`{ ${calls.join(' ')} }`);
         } else if (v.kind === 'ptr' && st && st.shape && dumpByTag[st.tag]) {
           watches.push(`if (${v.name}) ${dumpByTag[st.tag]}("${v.name}", ${v.name});`);
@@ -933,6 +1034,19 @@ function instrument(source, opt) {
         } else {
           watches.push(...watchCalls(lineNo, v));
         }
+      }
+      /* 成员函数：把 `this` 指向的整张结构也 dump 一次。
+         为什么必须：`class Trie` 的 insert 里只有 `node`（子树）可见，`main` 里的 `t` 要等函数返回才 dump，
+         于是"插入过程中整棵树长什么样"完全看不到。`this` 就是那个根。
+         卡片名用类名（`Trie`），比 `this` 好认；与 main 里同名结构重复时由折叠层去重。
+         **但构造/析构函数里绝不能 dump**：那时成员还没初始化（`children[]` 全是垃圾），
+         指针校验挡不住 0x0000dde8 这类"看起来合法"的野值，实测直接段错误。 */
+      const owner = inFn && inFn.owner;
+      const isCtorDtor = owner && (inFn.name === (owner.alias || owner.tag) || /^~/.test(inFn.name));
+      if (owner && !isCtorDtor && owner.shape && dumpByTag[owner.tag]) {
+        /* 变量名带 `this:` 前缀：折叠层据此"同名结构重复时优先保留用户自己的变量"
+           （`t` 与"成员函数里的 this"是同一张图，屏幕上留一张就够） */
+        watches.push(`${dumpByTag[owner.tag]}("this:${owner.alias || owner.tag}", this);`);
       }
     }
 

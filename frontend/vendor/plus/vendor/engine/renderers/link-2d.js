@@ -70,14 +70,59 @@ export function layout(layer, rect, env = {}) {
     nodes.set(`node:${n.id}`, { x: x + nodeW / 2, y: y + nodeH / 2 });
   });
 
+  /* 连线：先按"目标在哪个方向"选出入口边；如果这条线会横穿**别的结点**（逆置后的反向 next、
+     跳过中间结点、删结点后的重连……），就改走结点上方/下方的绕行折线。
+     不同方向各画一条横穿结点的直线，屏幕上就是"一条穿过方框的整线"——这正是使用者反馈的那个错。 */
+  const segCrosses = (p, q, r, pad = 1) => {
+    const steps = 40;
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const x = p[0] + (q[0] - p[0]) * t;
+      const y = p[1] + (q[1] - p[1]) * t;
+      if (x > r.x + pad && x < r.x + r.w - pad && y > r.y + pad && y < r.y + r.h - pad) return true;
+    }
+    return false;
+  };
+  const crossesAny = (pts, obstacles) => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      for (const r of obstacles) if (segCrosses(pts[i], pts[i + 1], r)) return true;
+    }
+    return false;
+  };
   const drawLink = (fromId, toId, label) => {
     const a = geo.get(fromId);
     const b = geo.get(toId);
-    if (!a || !b) return;
+    if (!a || !b || fromId === toId) return;
+    const obstacles = [...geo.entries()].filter(([id]) => id !== fromId && id !== toId).map(([, g]) => g);
+    const aMidY = a.y + a.h / 2;
+    const bMidY = b.y + b.h / 2;
+    const aMidX = a.x + a.w / 2;
+    const bMidX = b.x + b.w / 2;
     const sameRow = Math.abs(a.y - b.y) < 1;
-    const pts = sameRow
-      ? [[a.x + a.w, a.y + a.h / 2], [b.x, b.y + b.h / 2]]
-      : elbow(a.x + a.w / 2, a.y + a.h, b.x + b.w / 2, b.y, 'v');
+
+    /* 候选路线：直连（正/反向）或上下绕行；取第一条不穿任何结点的 */
+    const candidates = [];
+    if (sameRow && b.x >= a.x + a.w) candidates.push([[a.x + a.w, aMidY], [b.x, bMidY]]);            // 正序：右 → 左
+    if (sameRow && b.x + b.w <= a.x) {                                                              // 逆序：左 → 右
+      const dy = 7;
+      candidates.push([[a.x, aMidY + dy], [b.x + b.w, bMidY + dy]]);
+    }
+    if (b.y >= a.y + a.h) candidates.push(elbow(aMidX, a.y + a.h, bMidX, b.y, 'v'));                 // 目标在下
+    if (b.y + b.h <= a.y) candidates.push(elbow(aMidX, a.y, bMidX, b.y + b.h, 'v'));                 // 目标在上
+    /* 绕行：从结点下方（优先）或上方走一条"下-横-上"的折线 */
+    const bottomLimit = rect.y + rect.h - 6;
+    const topLimit = rect.y + 6;
+    const detourY = Math.min(bottomLimit, Math.max(a.y + a.h, b.y + b.h) + 20);
+    if (detourY > Math.max(a.y + a.h, b.y + b.h) + 2) {
+      candidates.push([[aMidX, a.y + a.h], [aMidX, detourY], [bMidX, detourY], [bMidX, b.y + b.h]]);
+    }
+    const upY = Math.max(topLimit, Math.min(a.y, b.y) - 20);
+    if (upY < Math.min(a.y, b.y) - 2) {
+      candidates.push([[aMidX, a.y], [aMidX, upY], [bMidX, upY], [bMidX, b.y]]);
+    }
+    let pts = candidates.find((route) => !crossesAny(route, obstacles)) || candidates[0];
+    if (!pts) return;
+
     prims.push(P.poly(`link-${fromId}-${toId}`, pts, { stroke: LINK.LinkNodeLine, sw: 1.6, arrow: 'end', z: 1 }));
     const mid = pts[pts.length - 1];
     prims.push(P.circle(`dot-${fromId}-${toId}`, mid[0], mid[1], 3.2, { fill: LINK.LinkDot, z: 2 }));

@@ -11,7 +11,7 @@ import { isPlus, buildPlusRun, plusCase } from './features/visualization/ext/plu
 import { createPlusSamples } from './features/workbench/plus-samples.js';
 import { plusStepVariables } from './features/workbench/step-vars.js';
 import { createDetectPanel } from './features/custom-code/detect-panel.js';
-import { createEngineProgramRun, isProgramSource, looksLikeFullSource } from './features/custom-code/engine-program.js';
+import { createEngineProgramRun, isProgramSource, looksLikeFullSource, looksLikeCpp } from './features/custom-code/engine-program.js';
 import { CUSTOM_SAMPLES, customSample, loadCustomSample } from './features/custom-code/samples.js';
 import { createPlayback } from './features/playback/index.js';
 import { createExercises } from './features/exercises/index.js';
@@ -190,6 +190,14 @@ async function start(event) {
          引擎不支持这段写法时回退极简子集翻译器，并把原因说出来，不静默换引擎。 */
       const isProgram = isProgramSource(input.source);
       const fullSource = looksLikeFullSource(input.source);
+      /* 代码里是 class/new/namespace，但语言还停在 C：先切到 C++ 再跑，
+         否则会看到 "Missing or misspelled data type near 'class'" 这种看不懂的报错。
+         后端也有同样的自动重试兜底（不依赖这个下拉框）。 */
+      if (looksLikeCpp(input.source) && $('code-language').value === 'c') {
+        $('code-language').value = 'cpp';
+        input.language = 'cpp';
+        message('检测到 C++ 代码（class/new 等），已自动切到 C++ 编译。');
+      }
       try {
         result = isProgram
           ? await runEngineProgram({ code: input.source, language: input.language, signal: controller.signal })
@@ -222,7 +230,7 @@ async function start(event) {
       graphForm.summarize(run.graph);
       message('');
     } else {
-      message(run.notice ? run.notice : '运行已创建。从第 1 步开始，可单步查看或播放。', Boolean(run.notice));
+      message(run.notice ? run.notice : '运行已创建。从第 1 步开始，可单步查看或播放。', Boolean(run.notice) && !run.noticeIsInfo);
     }
   }catch(error){if(ticket!==generation||error.name==='AbortError')return;if (!graph) clearRun();message(error.message,true);}
   finally{if(ticket===generation){pending=null;$('startBtn').disabled=false;$('startBtn').textContent=runButtonLabel();$('run-form').removeAttribute('aria-busy');}}

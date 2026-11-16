@@ -71,9 +71,21 @@
 
 /* 尊重系统"减少动态效果" */
 @media (prefers-reduced-motion: reduce) {
-  .avc-pos,
-  .avc-el { transition: none; }
-  .avc-el.avc-enter,
-  .avc-el.avc-exit,
-  .avc-el.avc-flash { animation: none; }
+  /* 只关"位移/缩放"，**保留透明度变化**：
+     全关掉的话，系统开了"减少动态效果"的机器上整幅图看起来像没有动画（用户实测过）。 */
+  .avc-pos { transition: none; }
+  .avc-el { transition: opacity 200ms ease; }
+  .avc-el.avc-enter { animation: avc-fade-kf 220ms ease-out; }
+  .avc-el.avc-flash { animation: avc-flash-kf 320ms ease-in-out 1; }
+  .avc-el.avc-exit { animation: avc-fadeout-kf 200ms ease-in forwards; }
+}
+
+@keyframes avc-fade-kf {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes avc-fadeout-kf {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }

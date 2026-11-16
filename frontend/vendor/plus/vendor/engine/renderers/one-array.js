@@ -14,6 +14,20 @@ import { ARRAY, UI } from '../theme.js';
 import { P } from '../prims.js';
 import { norm, stateOf, styleOf, fitRow, cellRect, borderWidth, toneFor } from './_shared.js';
 
+/* 值文本自适应：格子窄、数字长的时候，早期是"字号按格宽算"然后让文本溢出格子在隔壁字上叠着，
+   屏幕上一片糊。这里按"可用宽度 / 字符数"反推字号，最小 9px；还放不下就截断加省略号。 */
+function fitLabel(label, cellW, maxSize = 20, minSize = 9) {
+  const text = String(label ?? '');
+  const usable = Math.max(8, cellW - 6);
+  let size = Math.min(maxSize, Math.max(minSize, usable / 2.6));
+  const charW = 0.62;
+  if (!text.length) return { text, size };
+  while (size > minSize && text.length * size * charW > usable) size -= 1;
+  const maxChars = Math.max(1, Math.floor(usable / (size * charW)));
+  const shown = text.length > maxChars ? text.slice(0, Math.max(1, maxChars - 1)) + '…' : text;
+  return { text: shown, size };
+}
+
 export const STYLES = [1, 5];
 
 export function layout(layer, rect, env = {}) {
@@ -79,13 +93,13 @@ export function layout(layer, rect, env = {}) {
       // Shape=1：点
       const py = fit.y0 + fit.cellH - fit.cellH * hRatio * 0.92;
       prims.push(P.circle(`pt-${i}`, c.x + c.w / 2, py, 7, { fill: s.stroke, stroke: '#ffffff', sw: 2, opacity: s.opacity }));
-      if (showValues) prims.push(P.text(`ptv-${i}`, c.x + c.w / 2, py - 18, label, { fill: s.text, size: 12, opacity: s.opacity }));
+      if (showValues) { const fitTxt = fitLabel(label, c.w * 1.4); prims.push(P.text(`ptv-${i}`, c.x + c.w / 2, py - 18, fitTxt.text, { fill: s.text, size: Math.min(12, fitTxt.size), opacity: s.opacity })); }
       linePts.push([c.x + c.w / 2, py]);
     } else {
       prims.push(P.rect(`cell-${i}`, c.x, c.y, c.w, c.h, { r: 10, fill: s.fill, stroke: s.stroke, sw: borderWidth(st), opacity: s.opacity }));
       // 值条：把数值大小可视化（不替代数字，数字永远在框内）
       prims.push(P.rect(`bar-${i}`, c.x + 6, c.y + c.h - 6 - Math.max(2, (c.h - 26) * hRatio), c.w - 12, Math.max(2, (c.h - 26) * hRatio), { r: 4, fill: s.stroke, opacity: 0.14 * s.opacity, z: -1 }));
-      if (showValues) prims.push(P.text(`val-${i}`, c.x + c.w / 2, c.y + c.h / 2 - 2, label, { fill: s.text, size: Math.min(20, Math.max(12, c.w / 3.4)), opacity: s.opacity }));
+      if (showValues) { const fitTxt = fitLabel(label, c.w); prims.push(P.text(`val-${i}`, c.x + c.w / 2, c.y + c.h / 2 - 2, fitTxt.text, { fill: s.text, size: fitTxt.size, opacity: s.opacity })); }
       linePts.push([c.x + c.w / 2, c.y + c.h * (1 - hRatio * 0.85)]);
     }
     prims.push(P.text(`idx-${i}`, c.x + c.w / 2, axisY + 14, String(key), { fill: UI.textMuted, size: 11, opacity: s.opacity }));

@@ -159,3 +159,39 @@ test('点条目把源码跳行信息交给 onJumpLine', async () => {
   item.fire('click');
   assert.deepEqual(jumped, [7]);
 });
+
+test('面板显示「用法：栈/队列/普通数组」三态，并在状态栏汇总', async () => {
+  const { doc } = fakeDoc();
+  const mount = new FakeEl('div');
+  mount.ownerDocument = doc;
+  const panel = createDetectPanel({
+    mount,
+    request: async () => ({
+      ok: true,
+      count: 3,
+      items: [
+        { name: 's', templateId: 'sqstack', conf: 0.92, source: 'ast', line: 3, role: { kind: 'stack', zh: '栈（顺序栈）', direction: '只在末尾进出（LIFO）', confidence: 0.92 } },
+        { name: 'q', templateId: 'proto-seq', conf: 0.85, source: 'ast', line: 4, role: { kind: 'queue', zh: '队列（循环队列）', direction: '队头出、队尾进（FIFO）', confidence: 0.85 } },
+        { name: 'a', templateId: 'proto-seq', conf: 0.62, source: 'ast', line: 5, role: { kind: 'array', zh: '普通数组（无进出方向）', direction: '', confidence: 0.62 } },
+      ],
+      summary: { stacks: ['s'], queues: ['q'], arrays: ['a'] },
+    }),
+  });
+  panel.analyze('x');
+  await delay(700);
+  const items = mount.children[1].children;
+  assert.equal(items.length, 3);
+  const roles = items.map((li) => li.children.find((c) => c.className === 'detect-role'));
+  assert.ok(roles.every(Boolean), '每条都要有「用法」行');
+  assert.equal(roles[0].dataset.role, 'stack');
+  assert.match(roles[0].textContent, /栈（后进先出）/);
+  assert.match(roles[0].textContent, /LIFO/);
+  assert.equal(roles[1].dataset.role, 'queue');
+  assert.match(roles[1].textContent, /队头出/);
+  assert.equal(roles[2].dataset.role, 'array');
+  assert.match(roles[2].textContent, /普通数组（无进出方向）/);
+  const status = mount.children[0].children[1];
+  assert.match(status.textContent, /栈 s/);
+  assert.match(status.textContent, /队列 q/);
+  assert.match(status.textContent, /普通数组 1 个/);
+});

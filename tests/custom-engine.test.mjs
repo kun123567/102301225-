@@ -165,3 +165,24 @@ test('极简模式收到整程序时，给出"该用整程序模式"的指引，
     assert.notEqual(error.code, 'PROGRAM_MODE_REQUIRED', '纯函数体不该被当成整程序');
   }
 });
+
+test('不改输入数组的算法（接雨水）：能跑出步骤，提示指向"用整程序模式"而不是乱怪拆行', { skip: !compilerReady() && '本机没有 third_party 工具链' }, async () => {
+  const trap = [
+    'static int maxi(int a, int b) {', '  if (a > b) {', '    return a;', '  }', '  return b;', '}',
+    'int trap(int height[], int n) {',
+    '  int leftMax[32], rightMax[32], ans = 0, i;',
+    '  leftMax[0] = height[0];',
+    '  for (i = 1; i < n; ++i) {', '    leftMax[i] = maxi(leftMax[i - 1], height[i]);', '  }',
+    '  rightMax[n - 1] = height[n - 1];',
+    '  for (i = n - 2; i >= 0; --i) {', '    rightMax[i] = maxi(rightMax[i + 1], height[i]);', '  }',
+    '  for (i = 0; i < n; ++i) {', '    ans += (leftMax[i] < rightMax[i] ? leftMax[i] : rightMax[i]) - height[i];', '  }',
+    '  return ans;',
+    '}',
+  ].join('\n');
+  const run = await runCustomCodeWithEngine({ language: 'c', source: trap, array: [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1] });
+  assert.ok(run.steps.length > 20, '步数偏少：' + run.steps.length);
+  assert.equal(run.writes, 0, '这段代码不改输入数组');
+  assert.match(run.notice, /整程序模式/, '提示必须指向"看中间数组用整程序模式"：' + run.notice);
+  assert.equal(/检测到 \d+ 行/.test(run.notice), false, '花括号都拆行了，不该报"挤一行"');
+  assert.deepEqual(run.steps[0].array, [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1], '首步是输入数组本身');
+});

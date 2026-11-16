@@ -80,6 +80,19 @@ export function createVizWindow(host, {
   const root = document.createElement('section');
   root.className = 'win vizwin';
   root.dataset.win = 'viz';
+  /** 自定义代码的标题与图例：按本次 run 的真实形态（数组 / 结构）说人话 */
+  function applyCustomChrome(current) {
+    const structured = Boolean(current && current.structure === 'structure');
+    root.querySelector('.win-sub').textContent = structured ? '自定义代码 · 结构视图' : '自定义代码 · 数组视图';
+    root.querySelector('.vh-sub').textContent = '按实际执行记录播放';
+    const legend = root.querySelector('.viewport-legend');
+    legend.hidden = false;
+    legend.setAttribute('aria-label', structured ? '结构图例' : '数组写入图例');
+    legend.innerHTML = structured
+      ? '<span><b class="legend-right">橙</b> 药丸＝指针变量现在指哪个结点</span>'
+      : '<span><b class="legend-mid">蓝</b> 药丸＝本行游标（i / j …）</span><span><b class="legend-right">橙</b> 本步写入的格子</span>';
+  }
+
   const sorting = algorithm === 'bubble-sort';
   const custom = algorithm === 'custom-array';
   const graph = graphAlgorithm(algorithm);
@@ -109,11 +122,10 @@ export function createVizWindow(host, {
     legend.innerHTML = '<span><b class="legend-mid">绿</b> 已就位</span><span><b class="legend-right">橙</b> 比较或交换</span>';
   }
   if (custom) {
-    root.querySelector('.win-sub').textContent = '自定义代码 · 数组视图';
-    root.querySelector('.vh-sub').textContent = '按实际执行记录播放';
-    const legend = root.querySelector('.viewport-legend');
-    legend.setAttribute('aria-label', '数组写入图例');
-    legend.innerHTML = '<span><b class="legend-right">橙</b> 本步写入位置</span>';
+    /* 自定义代码可能是数组，也可能是链表/树/图/矩阵（run.structure 由后端折叠结果决定）。
+       窗口是页面初始化时建的（那时还没有 run），所以先按"数组"占位，
+       run 到了再由 bindRun 里的 applyCustomChrome 按真实形态重挂。 */
+    applyCustomChrome(run);
   }
   // plus01&02 示例：标题别再显示"二分查找 · 数组视图"（B 树/图/栈那些根本不是数组）
   if (isPlus(algorithm)) {
@@ -369,6 +381,9 @@ export function createVizWindow(host, {
   function bindRun(nextRun) {
     currentRun = nextRun;
     if (!nextRun) return;
+    /* 自定义代码的标题/图例要等 run 到了才知道是"数组"还是"结构"（窗口是页面初始化时建的，
+       那时还没有 run）。按 run.structure 重挂一次，避免"跑 Trie 却写着数组视图"。 */
+    if (custom) applyCustomChrome(nextRun);
     if (viz) viz.destroy();
     scene.replaceChildren();
     if (graph) {
