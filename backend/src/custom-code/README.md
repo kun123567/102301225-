@@ -141,7 +141,9 @@ if (a) { int _avc_pa; for (_avc_pa = 0; _avc_pa < (n) && _avc_pa < 24; _avc_pa++
 - 样例：`frontend/samples/ll-iitg.c` —— IIT Guwahati CS1109 课程代码
   <https://fac.iitg.ac.in/asahu/cs1109-25e/DSCode/LL.c>（322 行，插入/删除/查找/反转/最值，
   用到 struct、malloc、函数指针、bool）。**原样保存，未改动**，测试用 sha256 钉住：
-  `5c5febb2a55a0a600749a8345b3fbf5e85a6dc4931c692eff22b864a4f8d1aaf`。
+  `a1ac75dcb7b915f759cb8f6cb73b5a2f9a279bfac92b1866dfccbc80e70140aa`（**按 LF 归一化**后计算 ——
+  行尾随平台变（CRLF/LF）不算内容被改，代码本身被改才算；`.gitattributes` 里也给
+  `/frontend/samples/**` 加了 `-text`，避免 git 转行尾）。
 - 为了让它能编过，补了两个**兼容垫片**（`source-engine/runtime/compat/`，compile.js 会自动加进 INCLUDE）：
   `stdbool.h`（C99 bool/true/false）与 `stdint.h`（定宽类型）；另外 `traceProgram` 会去掉粘贴代码的 UTF-8 BOM
   （Watcom 会把 BOM 报成非法字符）。
@@ -280,3 +282,25 @@ push -2 / 0 / -3 后两个栈是 `[-2,0,-3]` 与 `[-2,-2,-3]`，pop 一次回到
 - 栈/队列视图按 `top|sp` / `front+rear|head+tail` 判；都不叫这些名字时按普通数组画（仍能看值）。
 - 垃圾判定 `|v| > 1e6`；字符基准只认唯一的 `- 'a'` 或 32..126 的数字字面量。
 - 采样上限：一维数组 16 格、二维每维 16、结点 32、边 48（超出部分不采，不静默改数据结构）。
+## 复审报告的四个问题（2026-11 第二轮，已修）
+
+| 问题 | 实测现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 合法大整数被误删 | `int a[3] = {1, 2000000, 3000000}` 渲染成 `[1]` | 渲染层按 `|v| > 1e6` 判"未初始化垃圾"并裁掉尾巴 | **数值大小不再参与裁剪**。插桩新增三类记录：`W`（`a[i] = …` 真正写入的下标）、`I|…|1/2`（声明时就带初始化器 → 每格都已有值）、`I|…|0`（声明时没初始化器 → 写之前都是未知）。裁剪只看"长度线索 / 写过的最大下标 / 初始化长度"，打码只看"声明没初始化且还没写过" |
+| 空请求一直没有响应 | `POST /api/detect` 带合法 JSON `null` → 客户端超时 | `JSON.parse('null')` 成功返回 `null`，处理函数 `if (!body) return;` 直接结束，**没发任何响应** | `parseBody` 统一校验：非对象（`null`/数组/标量）一律 400 `INVALID_INPUT` 并说明"收到的是 null" |
+| 异常退出仍标为成功 | `exit(7)` 的程序返回 `ok:true, stage:"ok"` | 只看"跑完了"，没看退出码 | 退出码非 0 → `stage:'runtime-exit'` + `abnormalExit:true` + `exitNote`（轨迹仍保留），前端红字提示"程序异常退出（exit 7）：轨迹可能不完整" |
+| 正式测试一项失败 | `npm test` 167/168，网上链表样例 sha256 对不上 | 哈希钉在**含 CRLF 的字节**上，换台机器/重新 checkout 行尾一变就不过 | 哈希改为按 **LF 归一化**计算并重新钉住；`.gitattributes` 给 `/frontend/samples/**` 加 `-text` |
+
+新记录的事件格式（`trace.js` 已加进解析白名单）：
+
+```
+W|line|name|idx            a[i] = … 的分号前插入（下标是写入前的值，语法上不改变程序行为）
+W|line|name|row|col        g[i][j] = …
+I|line|name|1|n            声明带初始化器（int a[3] = {1,2,3};）→ n 格都算已初始化
+I|line|name|2|rows|cols    二维同上
+I|line|name|0              声明没初始化器（int b[9];）→ 写之前都是未知
+```
+
+安全边界：下标表达式里出现 `++ / -- / =`（有副作用）就**不发**写入标记（会被求值两次，改变程序行为）；
+`a[i].key = …` 记到字段视图 `a.key` 上；整条结构体拷贝 `a[j] = a[j+1]` 给该元素的每个字段视图都记一笔；
+结构体字段视图（`s.data`，写入发生在成员函数里、名字对不上）不发"未初始化"记录，交给构造函数。

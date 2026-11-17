@@ -444,19 +444,75 @@ function arrayDims(txt, defines) {
   return dims.length ? dims : null;
 }
 
+/**
+ * 语句里的**数组写入标记**：`a[i] = …` / `a[i]++` / `++a[i]` / `g[i][j] += …` → W 事件。
+ *
+ * 为什么要它：判断"这格是不是未初始化"以前只能看数值大小（|v| > 1e6 算垃圾），
+ * 合法的大整数（2000000）就被误删了。写入记录是**事实**，不用猜。
+ *
+ * 安全边界：
+ *   · 下标表达式里出现 `++/--/=`（有副作用）就不发标记 —— 会被求值两次，改变程序行为；
+ *   · 只认"行首就是赋值目标"的简单语句（一行多语句本来就不插桩）。
+ * @returns {string[]} 要插在语句前面的 C 片段
+ */
+function writeMarkCalls(lineNo, text, structArrayFields) {
+  let s = String(text || '').trim().replace(/;$/, '').trim();
+  const prefix = s.match(/^(\+\+|--)(?=\s*[A-Za-z_])/);
+  if (prefix) s = s.slice(prefix[1].length).trim();
+  /* `++a[i]` 剥掉前缀后就没有尾部运算符了，所以"有前缀"时只认赋值目标本身；
+     另外 `a[i].key = …` 这种"结构体数组的字段写入"也要认（目标名拼成 `a.key`）。 */
+  const assign = /^([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)\s*(?:\.\s*([A-Za-z_]\w*)\s*)?(?:[-+*/%&|^]?=(?!=)|\+\+|--)/.exec(s);
+  const bare = prefix ? /^([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)$/.exec(s) : null;
+  const m = assign || bare;
+  if (!m) return [];
+  const name = m[1];
+  const field = m[3] || null;
+  const idxTexts = [...m[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
+  if (!idxTexts.length || idxTexts.length > 2) return [];
+  if (idxTexts.some((t) => /(\+\+|--|=(?!=))/.test(t))) return [];      // 有副作用：不发，避免求值两次
+  if (idxTexts.some((t) => !t)) return [];
+  if (idxTexts.length === 1) {
+    const at = `(int)(${idxTexts[0]})`;
+    /* `a[i].key = x` → 记到字段视图 `a.key` 上（字段伪变量就是按这个名字出层的） */
+    if (field) return [`__avc_w(${lineNo},"${name}.${field}",${at});`];
+    /* `a[j] = a[j + 1]`（整条结构体拷贝）→ 每个字段视图都算被写过 */
+    const fields = structArrayFields && structArrayFields.get(name);
+    if (fields && fields.length) return fields.map((f) => `__avc_w(${lineNo},"${name}.${f}",${at});`);
+    return [`__avc_w(${lineNo},"${name}",${at});`];
+  }
+  return [`__avc_w2(${lineNo},"${name}",(int)(${idxTexts[0]}),(int)(${idxTexts[1]}));`];
+}
+
 function watchCalls(line, v) {
   const n = v.name;
   const L = line;
   const q = (s) => '"' + s + '"';
   // 结构体字段（S.data / S.top）：显示名带前缀，取值表达式走 `S.字段`
   const expr = v.fieldOf ? (v.fieldOf + '.' + v.fieldName) : n;
-  if (v.kind === 'i') return [`__avc_vi(${L},${q(n)},(long)(${expr}));`];
-  if (v.kind === 'd') return [`__avc_vd(${L},${q(n)},(double)(${expr}));`];
+  /* 声明记录：带初始化器 → "每格都已有值"；没有初始化器 → "写之前都是未知"。
+     折叠层据此判断"未初始化"，不再靠数值大小猜（合法的大整数不会被当垃圾）。
+     声明行本身不插桩（C89 保证），所以这条标记挂在紧随其后的语句上，重复发也无害（幂等）。 */
+  const initMark = (dims) => {
+    if (!dims) return [];
+    /* 结构体字段伪变量（`s.data`）不发：它们的写入发生在**成员函数里**（那时只有裸名字 `data`），
+       名字对不上，发"未初始化"记录只会把好好的字段全打成未知。字段的初始化交给构造函数。 */
+    if (v.fieldOf) return [];
+    if (!v.hasInit) return [`__avc_uninit(${L},${q(n)});`];
+    if (dims.length === 1) return [`__avc_init(${L},${q(n)},${dims[0]});`];
+    if (dims.length >= 2) return [`__avc_init2(${L},${q(n)},${dims[0]},${dims[1]});`];
+    return [];
+  };
+  if (v.kind === 'i') {
+    return [...(v.uninitView ? [`__avc_uninit(${L},${q(v.viewBase || n)});`] : []), `__avc_vi(${L},${q(n)},(long)(${expr}));`];
+  }
+  if (v.kind === 'd') {
+    return [...(v.uninitView ? [`__avc_uninit(${L},${q(v.viewBase || n)});`] : []), `__avc_vd(${L},${q(n)},(double)(${expr}));`];
+  }
   if (v.kind === 's') {
     // 字符数组：既发整串（变量窗可读），也发逐下标（数组窗要按 a[i] 聚格）
     /* 逐下标发的是**字符**（类型标记 'c'）：只看数字的话，`"hello"` 会画成
        104/101/108/108/111，学生根本认不出这是字符串。类型标记来自声明，不是猜的。 */
-    const calls = [`__avc_vs(${L},${q(n)},${expr});`];
+    const calls = [...initMark(v.dims), `__avc_vs(${L},${q(n)},${expr});`];
     if (v.dims && v.dims.length === 1) {
       for (let i = 0; i < v.dims[0]; i++) {
         calls.push(`__avc_aic(${L},${q(n)},${i},(long)(unsigned char)(${expr}[${i}]));`);
@@ -476,7 +532,7 @@ function watchCalls(line, v) {
     if (!dims) return [];
     const fn = v.kind === 'ia' ? '__avc_vi' : '__avc_vd';
     const cast = v.kind === 'ia' ? 'long' : 'double';
-    const calls = [];
+    const calls = initMark(dims);
     if (dims.length === 1) {
       for (let i = 0; i < dims[0]; i++) calls.push(`${fn}(${L},${q(n + '[' + i + ']')},(${cast})(${expr}[${i}]));`);
     } else {
@@ -714,6 +770,8 @@ function instrument(source, opt) {
   // 收集变量：全局 + 各函数体首层
   const vars = [];
   const globals = [];
+  /* 结构体数组（`Item a[4]`）→ 它的字段视图名，写入标记据此分发到 `a.key` / `a.aux`（整条拷贝时全都算写过） */
+  const structArrayFields = new Map();
   for (let i = 0; i < code.length; i++) {
     /* 结构体/类的"成员声明区"跳过；但**成员函数体内部**要照常收集局部变量
        （`Trie* node = this;` / `int ch = ...` 全在这里，不收集就没有每一步的值） */
@@ -734,6 +792,9 @@ function instrument(source, opt) {
         scopeStart: fn ? fn.bodyLine : 0,
         scopeEnd: fn ? fn.end : code.length - 1,
         struct: st || null,
+        /* 声明行里带初始化器（`int a[3] = {1,2,3};`）→ 每一格都已有值。
+           折叠层用它区分"合法的大整数"和"未初始化的内存"。 */
+        hasInit: /=/.test(String(line || '')),
       });
       if (!fn) globals.push(rec);
       else vars.push(rec);
@@ -755,23 +816,30 @@ function instrument(source, opt) {
          整段代码降级到 trace-only，屏幕上 0 张卡（"结构体数组排序"这类题就是这样变空的）。 */
       if (rec.kind === 'struct' && st && rec.dims && rec.dims.length && d.kind !== 'ptr2' && pureDeclLine) {
         const count = Math.min(rec.dims[0] || 0, 16);
+        const fieldNames = [];
         for (const f of (st.fields || [])) {
           if (f.isPtr || f.isArray) continue;                 // 指针/数组字段塞不进单条 V 事件
           const isNum = INT_TYPES.test(f.type);
           const isFloat = /^(float|double)$/i.test(String(f.type || '').trim());
           if (!isNum && !isFloat) continue;
+          fieldNames.push(f.name);
           for (let k = 0; k < count; k++) {
             const frec = {
               /* 名字用 `a.key[k]`：数组窗按 base 聚格，于是"排序时 key 列怎么动"能一格格看 */
               name: rec.name + '.' + f.name + '[' + k + ']',
               fieldOf: rec.name + '[' + k + ']', fieldName: f.name,
               kind: isFloat ? 'd' : 'i', dims: null,
+              /* 对象是**结构体数组**：这些字段视图在写之前是未初始化的，
+                 名字和写入标记（`a.key`）对得上，所以可以放心发"未初始化"记录 */
+              uninitView: true,
+              viewBase: rec.name + '.' + f.name,
               declLine: rec.declLine, scopeStart: rec.scopeStart, scopeEnd: rec.scopeEnd,
               struct: null, structTag: null,
             };
             (fn ? vars : globals).push(frec);
           }
         }
+        structArrayFields.set(rec.name, fieldNames);
         continue;
       }
       if (rec.kind === 'struct' && st && !(rec.dims && rec.dims.length) && d.kind !== 'ptr2' && pureDeclLine) {
@@ -1064,6 +1132,10 @@ function instrument(source, opt) {
     }
     const wtail = (paramWatches.length || watches.length) ? ' ' + paramWatches.concat(watches).join(' ') : '';
     const isControl = /^(if|for|while|switch)\b/.test(trimmed);
+    /* 数组写入标记（`a[i] = …` / `a[i]++` / `g[i][j] = …`）：插在语句**前面**，
+       这样下标表达式还是"写入前"的值（`a[j] = a[j+1]` 的 j 不会被语句改掉）。
+       折叠层靠它区分"写过的格子"和"从没初始化过的格子"，不再拿数值大小猜垃圾。 */
+    const writeMark = writeMarkCalls(lineNo, trimmed, structArrayFields);
 
     if (declLike) {
       // 声明行完全不插桩：一旦在声明后追加语句，后面的声明就不再处于块首（C89 违规），
@@ -1078,7 +1150,8 @@ function instrument(source, opt) {
     } else if (isReturn && opt.withFrame) {
       out.push(`{ __avc_t(${lineNo}); __avc_x(); ${codeLine} }`);
     } else {
-      out.push(`{ __avc_t(${lineNo}); ${codeLine}${wtail} }`);
+      const mark = writeMark.length ? ' ' + writeMark.join(' ') : '';
+      out.push(`{ __avc_t(${lineNo});${mark} ${codeLine}${wtail} }`);
     }
     steps.push(lineNo);
   }

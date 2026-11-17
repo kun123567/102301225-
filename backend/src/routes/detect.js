@@ -17,12 +17,26 @@ function localOnly(request, response, json) {
   return true;
 }
 
+/** 解析请求体：非法 JSON、以及**合法但不是对象**（`null` / `[]` / `"x"` / `3`）都明确回 400。
+ *  以前 JSON.parse('null') 成功返回 null，调用方 `if (!body) return;` 就悄悄结束了 ——
+ *  客户端等到超时也收不到任何响应（审计报告里的"空请求一直没有响应"）。 */
 function parseBody(raw, response, json) {
-  try { return JSON.parse(raw); }
+  let body;
+  try { body = JSON.parse(raw); }
   catch {
     json(response, 400, { error: { code: 'INVALID_INPUT', message: '请求体不是合法 JSON。' } });
     return null;
   }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    json(response, 400, {
+      error: {
+        code: 'INVALID_INPUT',
+        message: '请求体必须是 JSON 对象（形如 {"code":"…"}）' + (body === null ? '，收到的是 null。' : '，收到的是 ' + (Array.isArray(body) ? '数组' : typeof body) + '。'),
+      },
+    });
+    return null;
+  }
+  return body;
 }
 
 export function handleDetectHealth(request, response, json) {

@@ -79,6 +79,10 @@ export function createEngineProgramRun({ request, now = () => Date.now() } = {})
       ? `插桩已降级（${data.degradedMode}）：这段代码里有插桩暂不支持的写法，所以只能看到执行到哪一行，`
         + '看不到变量和结构。把语句拆成一行一条、或用更朴素的写法，通常就能恢复完整结构。'
       : null;
+    /* 程序异常退出（exit(7) / 崩溃 / 超时）不是"运行成功"：轨迹还能看，但必须说明它不完整。 */
+    const exitNote = data.abnormalExit
+      ? (data.exitNote || `程序异常退出（exit ${data.exitCode}）：轨迹可能不完整。`)
+      : null;
     const sourceLines = String(code ?? '').split('\n').map((text, i) => ({ lineId: String(i + 1), text }));
 
     /* 纯数组的示例走**本项目的数组链路**（`.bsviz-*` + 8 组 keyframes + 指针 FLIP），
@@ -135,9 +139,11 @@ export function createEngineProgramRun({ request, now = () => Date.now() } = {})
       };
     });
     return {
-      /* 后端可能把 C 自动切成 C++ 编译（代码里是 class/new），把说明带上去让页面能提示 */
-      notice: data.note || degradedNote || null,
-      noticeIsInfo: Boolean(data.autoSwitched) && !degradedNote,
+      /* 说明优先级：异常退出（要人知道轨迹不完整）> 插桩降级 > 后端附带的其它说明 */
+      notice: exitNote || degradedNote || data.note || null,
+      noticeIsInfo: Boolean(data.autoSwitched) && !degradedNote && !exitNote,
+      abnormalExit: Boolean(data.abnormalExit),
+      exitCode: data.exitCode ?? null,
       langUsed: data.langUsed || language,
       runId: 'engine-' + now().toString(36),
       algorithm: 'custom-engine',

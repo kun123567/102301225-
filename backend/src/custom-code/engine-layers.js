@@ -50,35 +50,31 @@ const stackLayer = (name, values, { capacity, semantic, labelOf = null }) => ({
   roles: values.length ? { focus1: [values.length - 1] } : {},
 });
 
-/** 未初始化栈垃圾的特征：绝对值特别大（`int leftMax[32]` 只用前 12 个时，尾巴就是这种数） */
+/** 疑似未初始化：只在"没写过 + 没初始化"的格子上作为**展示**兜底（绝不用于裁剪长度） */
 const looksGarbage = (v) => !Number.isFinite(v) || Math.abs(v) > 1000000;
 
 /**
- * 数组裁剪：定长声明会按"声明长度"dump，尾巴是未初始化的栈垃圾。
- *   · 若同一批层里存在更短的数组（通常来自"数组形参按 n dump"），且本数组在短长度之后出现垃圾 → 裁到短长度；
- *   · 否则只去掉尾部连续的垃圾。
+ * 数组裁剪：**只按"写入/初始化记录"和长度线索裁，绝不按数值大小裁**。
+ *
+ * 以前这里按 `|v| > 1e6` 判"未初始化垃圾"并把尾巴切掉，于是合法的大整数
+ * （`int a[3] = {1, 2000000, 3000000}`）被当垃圾删成 `[1]`。数值大小不能当判据 ——
+ * 现在靠插桩发出的写入标记（W）知道"哪些格子被写过"，以及长度标量（top/n/len…）。
+ *
+ * @param {number[]} values 采到的值
+ * @param {number} shortestLen 同批里最短数组的长度（0/1 表示不用）
+ * @param {number} hintLen 长度线索（名字标量 / 写过的最大下标 + 1）；-1 表示没有
  * @returns {{values:number[], trimmedFrom:number|null}}
  */
 function trimValues(values, shortestLen, hintLen = -1) {
   let out = Array.isArray(values) ? values.slice() : [];
   let trimmedFrom = null;
-  const hasHint = hintLen >= 0 && hintLen <= out.length;
   const limit = Math.min(
     shortestLen >= 2 ? shortestLen : Infinity,
-    hasHint ? hintLen : Infinity,
+    hintLen >= 0 ? hintLen : Infinity,
   );
   if (Number.isFinite(limit) && out.length > limit) {
-    const tail = out.slice(limit);
-    /* 长度标量给的限是"事实"（含 top=-1 的空栈 = 0），直接用；只靠最短长度时，仍要求尾部像垃圾，避免误裁 */
-    if (hasHint || tail.some(looksGarbage)) { trimmedFrom = out.length; out = out.slice(0, limit); }
-  }
-  while (out.length > 1 && looksGarbage(out[out.length - 1])) out.pop();
-  /* 兜底：没有长度线索时（例如刚进入函数、top 还没 dump），未初始化尾巴就是"从第一个垃圾值开始"。
-     要求至少 2 个垃圾值才动手 —— 单个大数可能是真实数据（求和、坐标之类）。 */
-  const junkAt = out.map((v, i) => (looksGarbage(v) ? i : -1)).filter((i) => i >= 1);
-  if (junkAt.length >= 2 && junkAt[0] < out.length) {
-    if (trimmedFrom == null) trimmedFrom = out.length;
-    out = out.slice(0, junkAt[0]);
+    trimmedFrom = out.length;
+    out = out.slice(0, Math.max(0, limit));
   }
   return { values: out, trimmedFrom };
 }
@@ -442,20 +438,22 @@ function arrayLayersOf(model, statics, scalars) {
   return entries.map(([name, entry]) => {
     const rawLength = entry.values.length;
     /* 长度线索：① 名字表（top / n / len …）—— 只对常见写法有效；
-       ② **数据驱动兜底**：这组里"真正被写过"的最大下标 + 1
-          （`int a[100]` 只写了前 3 格时，没线索也能只画 3 格，不靠名字猜）。 */
+       ② **写入/初始化记录**：写过的最大下标 + 1，或声明时初始化过的长度。
+       两者都没有就保持采样长度（不按数值大小猜）。 */
     const writtenLen = Number.isInteger(entry.writtenMax) && entry.writtenMax >= 0 ? entry.writtenMax + 1 : -1;
-    const hint = hinted >= 0 ? hinted : writtenLen;
+    const initLen = Number.isInteger(entry.initLen) ? entry.initLen : -1;
+    const hint = hinted >= 0 ? hinted : Math.max(writtenLen, initLen);
     let { values, trimmedFrom } = trimValues(entry.values, shortest, hint);
     if (entry.chars) {
       /* 字符数组：尾部连续的 '\0' 是"字符串结束"、不是数据 —— 裁掉才能看清 "hello" 这 5 格 */
       while (values.length > 1 && values[values.length - 1] === 0) values = values.slice(0, -1);
     }
-    /* 中间还没初始化的格子（`int b[9]` 只写了几格）：柱高按 0 画、标签写 '?'，
-       绝不把 4208300 这种栈垃圾当数据摆出来 */
+    /* 中间还没初始化的格子：只看**声明/写入记录**（声明时没有初始化器、且这格还没写过 → 未知）。
+       绝不因为"数值大"就当垃圾 —— `int a[3] = {1, 2000000, 3000000}` 必须原样显示。 */
+    const inited = (i) => (entry.uninit ? (entry.written.has(i) || i < (entry.initLen ?? 0)) : true);
     const labels = entry.chars
       ? values.map(charLabel)
-      : values.map((v) => (looksGarbage(v) ? '?' : String(v)));
+      : values.map((v, i) => (inited(i) ? String(v) : '?'));
     const shown = values.map((v, i) => (labels[i] === '?' ? 0 : v));
     const view = viewOf(semanticOf(name), scalars);
     const semantic = semanticForView(view, semanticOf(name));
@@ -681,9 +679,14 @@ function matrixLayer(name, entry) {
     const row = [];
     for (let c = 0; c < cols; c++) {
       const v = entry.cells.get(r + ',' + c);
-      /* 未初始化/没 dump 到的格子写成 '·'：把 4208300 这种栈垃圾当数据画出来是误导。
+      /* 未写过的格子写 '·'：判据是**声明/写入记录**（声明时没有初始化器且还没写过），
+         不是数值大小。整张矩阵声明时就初始化过、或根本没记录 → 原样显示。
          字符矩阵（棋盘/迷宫）按字符显示 —— 值就是字符码，声明里写了 char。 */
-      if (v === undefined || looksGarbage(v)) row.push('·');
+      const key = r + ',' + c;
+      const inited = entry.uninit
+        ? (entry.written.has(key) || (entry.initR != null && r < entry.initR && entry.initC != null && c < entry.initC))
+        : true;
+      if (v === undefined || !inited) row.push('·');
       else row.push(entry.chars ? charLabel(v) : v);
     }
     values.push(row);
@@ -779,12 +782,17 @@ export function buildLayerRun({ trace, sourceLines = [], preludeLines = 0, stati
       const [, base, idxText] = element;
       const index = Number(idxText);
       if (index >= MAX_NODES) continue;
-      const entry = model.arrays.get(base) || { values: [], focus: null };
+      const entry = model.arrays.get(base) || { values: [], focus: null, written: new Set(), seen: new Set() };
       while (entry.values.length <= index) entry.values.push(null);
       const num = Number(value);
       if (entry.values[index] !== num && Number.isFinite(num) && entry.focus == null) entry.focus = index;   // 记本步第一个变化的元素
-      /* "写过的最大下标"：数据驱动的长度线索（没有 top/n 这类名字时靠它裁长度） */
-      if (entry.values[index] !== num && Number.isFinite(num)) entry.writtenMax = Math.max(entry.writtenMax ?? -1, index);
+      /* 值变了 = 一定被写过（第一次观测不算：那只是"首次看到"）。
+         真正的写入事实来自 W 事件；这里作为补充（`*p = …`、函数里改内存等抓不到目标的写入）。 */
+      if (entry.seen.has(index) && entry.values[index] !== num && Number.isFinite(num)) {
+        entry.written.add(index);
+        entry.writtenMax = Math.max(entry.writtenMax ?? -1, index);
+      }
+      entry.seen.add(index);
       entry.values[index] = Number.isFinite(num) ? num : 0;
       /* 字符数组：类型标记 'c' 来自声明（char），据此把格子显示成字符而不是 104/101/108；
          指针数组 'p' 里是**地址**（`HNode* bucket[7]`），不是数据 —— 不能当数值数组画 */
@@ -793,6 +801,63 @@ export function buildLayerRun({ trace, sourceLines = [], preludeLines = 0, stati
       model.arrays.set(base, entry);
       families.add('array');
       refresh();
+      continue;
+    }
+    if (kind === 'I') {
+      /* 声明记录：
+         shape '0' = 声明时没有初始化器 → 写之前都是未知；
+         shape '1'/'2' = 声明时就带初始化器 → 每格都已有值（合法的大整数必须原样显示）。 */
+      const [, , name, shape, aText, bText] = event;
+      const base = String(name || '');
+      if (String(shape) === '0') {
+        const entry = model.arrays.get(base) || { values: [], focus: null, written: new Set(), seen: new Set() };
+        entry.uninit = true;
+        model.arrays.set(base, entry);
+        const mat = model.matrices.get(base) || { cells: new Map(), maxR: 0, maxC: 0, focus: null, written: new Set() };
+        mat.uninit = true;
+        model.matrices.set(base, mat);
+      } else if (String(shape) === '1') {
+        const n = Number(aText);
+        if (Number.isFinite(n) && n >= 0) {
+          const entry = model.arrays.get(base) || { values: [], focus: null, written: new Set(), seen: new Set() };
+          entry.initLen = Math.max(entry.initLen ?? 0, Math.min(n, MAX_NODES));
+          model.arrays.set(base, entry);
+        }
+      } else if (String(shape) === '2') {
+        const rows = Number(aText);
+        const cols = Number(bText);
+        if (Number.isFinite(rows) && Number.isFinite(cols)) {
+          const entry = model.matrices.get(base) || { cells: new Map(), maxR: 0, maxC: 0, focus: null, written: new Set() };
+          entry.initR = Math.max(entry.initR ?? 0, Math.min(rows, MAX_NODES));
+          entry.initC = Math.max(entry.initC ?? 0, Math.min(cols, MAX_NODES));
+          model.matrices.set(base, entry);
+          families.add('matrix');
+        }
+      }
+      touch();
+      continue;
+    }
+    if (kind === 'W') {
+      /* 写入标记：`a[i] = …` / `g[i][j] = …`（插桩在语句前面发的，下标是写入前的值）。
+         这是"哪些格子真的有数据"的**事实**来源 —— 裁剪与"未初始化"判断都只认它和长度线索。 */
+      const [, , name, aText, bText] = event;
+      const base = String(name || '');
+      const a = Number(aText);
+      if (a >= MAX_NODES) continue;
+      if (bText === undefined) {
+        const entry = model.arrays.get(base) || { values: [], focus: null, written: new Set(), seen: new Set() };
+        entry.written.add(a);
+        entry.writtenMax = Math.max(entry.writtenMax ?? -1, a);
+        model.arrays.set(base, entry);
+      } else {
+        const b = Number(bText);
+        if (b >= MAX_NODES) continue;
+        const entry = model.matrices.get(base) || { cells: new Map(), maxR: 0, maxC: 0, focus: null, written: new Set() };
+        entry.written.add(a + ',' + b);
+        model.matrices.set(base, entry);
+        families.add('matrix');
+      }
+      touch();
       continue;
     }
     if (kind === 'L') {

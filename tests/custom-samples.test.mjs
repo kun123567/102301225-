@@ -31,9 +31,13 @@ test('示例库：每条示例都有 id/标题/语言/模式，网上样例带�
 test('网上样例是**原样**的：文件存在、无 BOM、sha256 与记录一致、含 main', async () => {
   const bytes = await readFile(SAMPLE_FILE);
   assert.notEqual(bytes[0], 0xEF, '文件不该带 UTF-8 BOM');
-  const hash = createHash('sha256').update(bytes).digest('hex');
-  assert.equal(hash, WEB.sha256, '样例文件被改过了（sha256 不一致）');
-  const text = bytes.toString('utf8');
+  /* 换行归一化后再算哈希：`.gitattributes` 已把该文件锁成 -text，
+     但不同平台/历史 checkout 上仍可能带 CRLF —— 那不算"内容被改过"，
+     真正要盯的是"代码本身有没有被人动过"（行尾不是代码）。 */
+  const normalized = Buffer.from(bytes.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+  const hash = createHash('sha256').update(normalized).digest('hex');
+  assert.equal(hash, WEB.sha256, '样例文件被改过了（sha256 不一致；按 LF 归一化后计算）');
+  const text = normalized.toString('utf8');
   assert.match(text, /\bint\s+main\s*\(/, '网上样例应是整程序');
   assert.match(text, /typedef struct Node/, '样例应定义链表结点');
   assert.ok(text.split('\n').length >= 100, '样例行数偏少：' + text.split('\n').length);

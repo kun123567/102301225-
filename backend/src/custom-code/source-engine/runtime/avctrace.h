@@ -226,8 +226,56 @@ static void __avc_aic2(int line, const char* name, int r, int c, long v)
     __avc_out(b);
 }
 
-/* 指针数组的元素（`HNode* bucket[7]`、`Edge* adj[6]`）：类型标记 'p'。
- * 值是**地址**不是数据 —— 折成数值数组会把 15278504 这种地址当数据画出来，
+/* 写入标记：`a[i] = …` 这类真正被赋值的下标。
+ * 为什么需要：判断"这格是不是未初始化"以前只能看数值大小（|v| > 1e6 就当垃圾），
+ * 于是合法的大整数（2000000 这种）会被当垃圾删掉。有了写入记录就不用猜：
+ * **没写过、也没初始化过**的格子才算未知；写过的一律照原值显示。 */
+static void __avc_w(int line, const char* name, int idx)
+{
+    char b[300];
+    __avc_open();
+    sprintf(b, "W|%d|%s|%d", line, name, idx);
+    __avc_out(b);
+}
+
+/* 二维数组的写入标记：`g[i][j] = …` */
+static void __avc_w2(int line, const char* name, int r, int c)
+{
+    char b[300];
+    __avc_open();
+    sprintf(b, "W|%d|%s|%d|%d", line, name, r, c);
+    __avc_out(b);
+}
+
+/* 初始化记录：`int a[3] = {1, 2000000, 3000000};` 这种"声明时就给了值"的数组，
+ * 所有格子都算已初始化（C 会把剩下的补 0）。有了它，就不必靠"数值大小像不像垃圾"来判断，
+ * 合法的大整数不会被当成未初始化数据。 */
+static void __avc_init(int line, const char* name, int n)
+{
+    char b[300];
+    __avc_open();
+    sprintf(b, "I|%d|%s|1|%d", line, name, n);
+    __avc_out(b);
+}
+static void __avc_init2(int line, const char* name, int r, int c)
+{
+    char b[300];
+    __avc_open();
+    sprintf(b, "I|%d|%s|2|%d|%d", line, name, r, c);
+    __avc_out(b);
+}
+
+/* 反向记录：声明时**没有**初始化器（`int b[9];`）→ 这些格子在第一次写入之前都是未知值。
+ * 有了这条，"未初始化"就不必靠数值大小猜（合法的大整数不会再被当垃圾）。 */
+static void __avc_uninit(int line, const char* name)
+{
+    char b[200];
+    __avc_open();
+    sprintf(b, "I|%d|%s|0", line, name);
+    __avc_out(b);
+}
+
+/* 指针数组的元素（`HNode* bucket[7]`、`Edge* adj[6]`）：类型标记 'p'。 * 值是**地址**不是数据 —— 折成数值数组会把 15278504 这种地址当数据画出来，
  * 屏幕上就是一堆无意义的巨大数字。折叠层看到 'p' 就不建数值数组层。 */
 static void __avc_aip(int line, const char* name, int idx, unsigned long p)
 {

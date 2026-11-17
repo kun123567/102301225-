@@ -11,6 +11,8 @@
  *   ['HF', addr, line]            堆释放
  *   ['L', var, idx, key, ptr, more] 链表/树结点
  *   ['LE', var, count, shape]
+ *   ['W', line, name, idx] / ['W', line, name, row, col]  数组写入标记
+ *   ['I', line, name, shape, n]      声明记录（是否带初始化器）
  *   ['LIMIT']
  */
 function parseTrace(text) {
@@ -40,6 +42,11 @@ function parseTrace(text) {
       case 'M': events.push(['M', p[1] || '', p.slice(2).join('|')]); break;
       /* NM|var|idx|key=value —— 结点语义属性（红黑 color / 线索 ltag），渲染器画角标用 */
       case 'NM': events.push(['NM', p[1] || '', +p[2] || 0, p.slice(3).join('|') || '']); break;
+      /* W|line|name|idx  /  W|line|name|row|col —— 数组写入标记（`a[i] = …` 真正被写的下标）。
+       * 判断"这格是不是未初始化"只认它和下面的 I 记录，不再拿数值大小猜。 */
+      case 'W': events.push(['W', +p[1] || 0, p[2] || '', p[3] === '' ? -1 : Number(p[3]), p[4] === undefined ? undefined : Number(p[4])]); break;
+      /* I|line|name|shape[|n]  —— 声明记录：0=声明时没初始化器、1/2=声明时就带初始化器 */
+      case 'I': events.push(['I', +p[1] || 0, p[2] || '', p[3] == null ? '0' : String(p[3]), p[4] === undefined ? undefined : Number(p[4]), p[5] === undefined ? undefined : Number(p[5])]); break;
       case 'LIMIT': truncated = true; break;
       default: break;
     }

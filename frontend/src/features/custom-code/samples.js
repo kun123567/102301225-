@@ -18,7 +18,9 @@ export const CUSTOM_SAMPLES = Object.freeze([
     path: '/samples/ll-iitg.c',
     source: 'https://fac.iitg.ac.in/asahu/cs1109-25e/DSCode/LL.c',
     note: '322 行整程序：插入/删除/查找/反转/最值，用到 struct、malloc、函数指针、bool。原样使用，未做任何改写。',
-    sha256: '5c5febb2a55a0a600749a8345b3fbf5e85a6dc4931c692eff22b864a4f8d1aaf',
+    /* 按 **LF 归一化** 后的内容算哈希：行尾随平台变（CRLF/LF）不算"内容被改过"，
+       代码本身被改动才算。`.gitattributes` 里也给这个文件加了 -text，避免 git 转行尾。 */
+    sha256: 'a1ac75dcb7b915f759cb8f6cb73b5a2f9a279bfac92b1866dfccbc80e70140aa',
     expect: { families: ['list'], minSteps: 50 },
   },
   {

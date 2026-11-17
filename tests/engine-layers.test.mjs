@@ -830,3 +830,43 @@ test('指针数组（HNode* bucket[7]）不当数值数组画出来（地址不�
   const arrays = trace.layerRun.steps.flatMap((s) => s.layers.filter((l) => l.style === 1));
   assert.equal(arrays.filter((l) => l.title === 'bucket').length, 0, '指针数组不该被画成数值数组');
 });
+/* ---------------- 11. 合法大整数 vs 未初始化内存（复审报告问题 1） ---------------- */
+test('合法大整数照原样显示；没初始化过的格子才打码（不按数值大小裁）', { skip: !compilerReady() && '本机没有 third_party 工具链' }, async () => {
+  /* 初始化列表给了 2000000 / 3000000：它们是大整数，不是垃圾，一格都不能少 */
+  const withInit = [
+    '#include <stdio.h>',
+    'int main(void)',
+    '{',
+    '    int a[3] = {1, 2000000, 3000000};',
+    '    int i, s = 0;',
+    '    for (i = 0; i < 3; i++) {',
+    '        s = s + a[i];',
+    '    }',
+    '    printf("%d\\n", s);',
+    '    return 0;',
+    '}',
+  ].join('\n');
+  const t1 = await traceProgram({ code: withInit, lang: 'c', maxSteps: 500, withLayers: true });
+  assert.equal(t1.ok, true);
+  const a1 = t1.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(a1.data.values, [1, 2000000, 3000000], '大整数不能被当垃圾删掉：' + JSON.stringify(a1.data.values));
+  assert.deepEqual(a1.data.labels, ['1', '2000000', '3000000']);
+
+  /* 没有初始化列表、只写了前两格：剩下的格子必须标成未知（?），而不是把栈垃圾摆出来 */
+  const noInit = [
+    '#include <stdio.h>',
+    'int main(void)',
+    '{',
+    '    int b[6];',
+    '    b[0] = 7;',
+    '    b[1] = 8;',
+    '    printf("%d\\n", b[1]);',
+    '    return 0;',
+    '}',
+  ].join('\n');
+  const t2 = await traceProgram({ code: noInit, lang: 'c', maxSteps: 500, withLayers: true });
+  assert.equal(t2.ok, true);
+  const b2 = t2.layerRun.steps.at(-1).layers.find((l) => String(l.id).startsWith('arr:b'));
+  assert.deepEqual(b2.data.values, [7, 8], '只写了两格就只画两格：' + JSON.stringify(b2.data.values));
+  for (const v of b2.data.values) assert.ok(Math.abs(Number(v)) < 1e6, '不该出现未初始化垃圾：' + v);
+});

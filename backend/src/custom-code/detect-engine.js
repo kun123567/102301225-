@@ -236,7 +236,8 @@ export async function traceProgram(input) {
     ...retry,
     langUsed: 'cpp',
     autoSwitched: true,
-    note: '这段代码是 C++（含 class/namespace/new 等），已自动按 C++ 编译。',
+    /* 两条说明都可能存在（自动切 C++ + 异常退出），拼起来别互相覆盖 */
+    note: ['这段代码是 C++（含 class/namespace/new 等），已自动按 C++ 编译。', retry.exitNote].filter(Boolean).join(' '),
   };
 }
 
@@ -304,9 +305,18 @@ async function traceProgramOnce(input, forcedLang) {
       }
       truncated = true;
     }
+    /* 正常结束 = 退出码 0。非 0（`exit(7)`、崩溃、超时被杀）都不是 ok ——
+       以前一律返回 stage:'ok'，用户看到"运行成功"其实程序是异常退出的。
+       轨迹仍然保留（已经跑出来的那几步是有价值的），但用 abnormalExit / stage 说清楚。 */
+    const exitCode = Number.isFinite(ex.exitCode) ? ex.exitCode : null;
+    const abnormalExit = exitCode !== null && exitCode !== 0;
     const result = {
       ok: true,
-      stage: 'ok',
+      stage: abnormalExit ? 'runtime-exit' : 'ok',
+      abnormalExit,
+      exitNote: abnormalExit
+        ? `程序以非 0 状态退出（exit ${exitCode}）：轨迹可能不完整（只保留退出前跑到的步骤）。`
+        : null,
       degradedMode: usedName,
       steps: truncated ? limit : parsed.steps,
       truncated,
@@ -314,7 +324,7 @@ async function traceProgramOnce(input, forcedLang) {
       structure: meta,
       stdout: ex.stdout,
       stderr: ex.stderr,
-      exitCode: ex.exitCode,
+      exitCode,
       runMs: ex.ms,
       log: used.log || '',
     };
