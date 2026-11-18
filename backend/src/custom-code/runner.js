@@ -151,9 +151,29 @@ export async function runCustomCodeWithEngine(input) {
     const detail = first ? `第 ${first.line} 行：${first.message}` : (trace.stage === 'instrument' ? trace.log : '代码编译未通过。');
     throw new CodeRunError(422, 'CODE_COMPILE_ERROR', String(detail || '代码编译未通过。').slice(0, 300));
   }
-  const run = engineTraceToRun({ trace, harness, initialArray: array, sourceVersion: `local-engine-${language}-v1` });
+  /* 与整程序模式一致：退出码/截断必须往上传（下层 trace 的 ok:true 只表示"有可用轨迹"，
+     不代表程序正常结束）—— 评审报告 §3.7。 */
+  const run = engineTraceToRun({
+    trace: {
+      events: trace.events,
+      truncated: trace.truncated,
+      abnormalExit: trace.abnormalExit,
+      exitCode: trace.exitCode,
+    },
+    harness,
+    initialArray: array,
+    sourceVersion: `local-engine-${language}-v1`,
+  });
   if (!run.ok) throw new CodeRunError(422, 'ENGINE_NO_STEPS', run.error);
-  run.meta = { ...(run.meta || {}), degradedMode: trace.degradedMode, engineSteps: trace.steps, entry: harness.entry };
+  run.meta = {
+    ...(run.meta || {}),
+    degradedMode: trace.degradedMode,
+    engineSteps: trace.steps,
+    entry: harness.entry,
+    exitCode: trace.exitCode ?? null,
+    abnormalExit: Boolean(trace.abnormalExit),
+    truncated: Boolean(trace.truncated),
+  };
   return run;
 }
 

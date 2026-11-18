@@ -1,5 +1,6 @@
 import { arraySearch } from './array-search.js';
 import { graphAlgorithm } from './graph-algorithms.js';
+import { isPlus, plusCase } from '../visualization/ext/plus-bridge.js';
 
 // Layout state never owns or changes the algorithm's playback cursor.
 export function createWorkbenchUI({ onNavigate = () => {} } = {}) {
@@ -107,7 +108,12 @@ export function createWorkbenchUI({ onNavigate = () => {} } = {}) {
       query.set('unit', unit);
       if (section && /^[a-z0-9-]{1,50}$/.test(section)) query.set('section', section);
     }
-    if (name === 'workbench' && (['binary-search', 'bubble-sort', 'custom-array'].includes(requestedAlgorithm) || graphAlgorithm(requestedAlgorithm) || arraySearch(requestedAlgorithm))) {
+    /* plus 示例也要能写进地址（评审报告 §3.11）：以前白名单里没有 isPlus，
+       选完示例后 hash 不带 plus 参数，复制地址/刷新/前进后退就回到默认算法。
+       按目录校验 id（plusCase），避免接受任意脏值。 */
+    const plusId = isPlus(requestedAlgorithm) ? String(requestedAlgorithm).slice('plus:'.length) : null;
+    const knownPlus = Boolean(plusId && plusCase(plusId));
+    if (name === 'workbench' && (['binary-search', 'bubble-sort', 'custom-array'].includes(requestedAlgorithm) || graphAlgorithm(requestedAlgorithm) || arraySearch(requestedAlgorithm) || knownPlus)) {
       query.set('algorithm', requestedAlgorithm);
     }
     const hash = '#' + name + (query.size ? '?' + query : '');
@@ -216,7 +222,8 @@ export function createWorkbenchUI({ onNavigate = () => {} } = {}) {
     setAlgorithm(value) {
       algorithm = value;
       panel.querySelector('.tutor-practice').hidden = Boolean(graphAlgorithm(value) || arraySearch(value));
-      const tutorUnavailable = value === 'custom-array';
+      /* plus 示例是本地预览：后端没有这次运行的记录，步骤问答必然 404（评审报告 §3.10）→ 直接关掉入口 */
+      const tutorUnavailable = value === 'custom-array' || isPlus(value);
       if (tutorUnavailable && open) show(false, false);
       ball.hidden = currentPage !== 'workbench' || tutorUnavailable;
     },

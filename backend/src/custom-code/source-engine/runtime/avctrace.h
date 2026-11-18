@@ -275,6 +275,16 @@ static void __avc_uninit(int line, const char* name)
     __avc_out(b);
 }
 
+/* 字符串字面量初始化的字符数组（`char s[] = "hi";`）：shape=3。
+ * 只有这种数组才允许把尾部 '\0' 当"字符串结束"裁掉 —— 二进制字符数据里的 0 是数据，不能删。 */
+static void __avc_initstr(int line, const char* name, int n)
+{
+    char b[300];
+    __avc_open();
+    sprintf(b, "I|%d|%s|3|%d", line, name, n);
+    __avc_out(b);
+}
+
 /* 指针数组的元素（`HNode* bucket[7]`、`Edge* adj[6]`）：类型标记 'p'。 * 值是**地址**不是数据 —— 折成数值数组会把 15278504 这种地址当数据画出来，
  * 屏幕上就是一堆无意义的巨大数字。折叠层看到 'p' 就不建数值数组层。 */
 static void __avc_aip(int line, const char* name, int idx, unsigned long p)

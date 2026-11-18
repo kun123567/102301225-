@@ -85,7 +85,11 @@ function updatePracticeContext(context) {
 }
 function publish(context) {
   currentContext = context;
-  agent.setContext(isCustom() ? null : context);
+  /* 54 个 plus 示例是**本地生成的预览**：后端没有这次运行的记录（没有 runId/源码登记），
+     把上下文塞给 Agent 只会换来 404 RUN_NOT_FOUND（评审报告 §3.10）。
+     所以预览不发布给 Agent，只发布给界面（步骤/练习/订阅者照常）。 */
+  const preview = Boolean(context && (context.algorithm || '').startsWith('plus:'));
+  agent.setContext(isCustom() || preview ? null : context);
   ui.setContext(context);
   updatePracticeContext(context);
   for (const listener of listeners) { try { listener(context); } catch(error) { console.error('步骤订阅失败',error); } }

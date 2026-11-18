@@ -153,8 +153,17 @@ export function engineTraceToRun({ trace, harness, initialArray = [], sourceVers
   for (const step of steps) step.array = (step.array || []).map((v) => (v == null ? 0 : v));
 
   const last = steps[steps.length - 1];
-  last.done = true;
-  last.result = last.array.length ? [...last.array] : null;
+  /* 只有"正常跑完、没被截断"时，末步才算完成、末态才算结果（评审报告 §3.6/§3.7）。
+     截断（步数超过 maxSteps）或异常退出（exit 7 / abort / 超时）时：
+       · 播放器可以播到轨迹末尾，但 done 不能为 true；
+       · 那个数组只是"最后观测到的状态"，不能当 result（否则用户会把中间态当答案）。 */
+  const truncated = Boolean(trace?.truncated);
+  const abnormalExit = Boolean(trace?.abnormalExit);
+  const exitCode = Number.isFinite(trace?.exitCode) ? trace.exitCode : null;
+  const completed = !truncated && !abnormalExit;
+  last.done = completed;
+  last.result = completed && last.array.length ? [...last.array] : null;
+  last.lastObserved = last.array.length ? [...last.array] : null;
   /* 有步骤但一次数组变化都没有 —— 不假装知道原因，两个可能都说清楚，并给出能照做的动作：
      ① 这段代码本来就不改输入数组（只把中间结果放在别的数组/标量里，如"接雨水"的 leftMax/rightMax）
         → 想看中间数组请用整程序模式；
@@ -168,20 +177,29 @@ export function engineTraceToRun({ trace, harness, initialArray = [], sourceVers
     const body = close > open ? code.slice(open + 1, close) : code.slice(open + 1);
     return (body.match(/;/g) || []).length >= 1;      // 花括号里还有语句 → 那一句不会被单独插桩
   }).length;
-  const notice = writes !== 0 ? null
-    : '本次没有记录到数组变化。两种常见原因：① 这段代码没有修改输入数组（结果算在别的变量里）——'
-      + '想看中间数组请用整程序模式（保留 `int main`）；② 有语句写在同一行的花括号里，插桩只按"一条语句一行"工作——'
-      + '把它们拆成一行一句再试。'
-      + (packedLines > 0 ? '（检测到 ' + packedLines + ' 行属于第 ② 种）' : '');
+  const notice = abnormalExit
+    ? `函数以非 0 状态退出（exit ${exitCode}）：轨迹只到退出前，末态不是函数的最终结果。`
+    : (truncated
+      ? '轨迹被截断（步数超过上限）：末态是最后观测到的状态，不是函数的最终结果。'
+      : (writes !== 0 ? null
+        : '本次没有记录到数组变化。两种常见原因：① 这段代码没有修改输入数组（结果算在别的变量里）——'
+          + '想看中间数组请用整程序模式（保留 `int main`）；② 有语句写在同一行的花括号里，插桩只按"一条语句一行"工作——'
+          + '把它们拆成一行一句再试。'
+          + (packedLines > 0 ? '（检测到 ' + packedLines + ' 行属于第 ② 种）' : '')));
   return {
     ok: true,
     algorithm: 'custom-array',
     sourceVersion,
     sourceLines,
     steps,
-    result: last.result,
+    /* 截断/异常退出时不给"最终结果"，只给最后观测（lastObserved） */
+    result: completed ? last.result : null,
+    lastObserved: last.lastObserved,
     writes,
+    truncated,
+    abnormalExit,
+    exitCode,
     notice,
-    meta: { entry: harness?.entry || null, engineSteps: steps.length, finalArray: last.result, writes },
+    meta: { entry: harness?.entry || null, engineSteps: steps.length, finalArray: completed ? last.result : null, writes, truncated, abnormalExit, exitCode },
   };
 }

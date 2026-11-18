@@ -65,13 +65,10 @@ const looksGarbage = (v) => !Number.isFinite(v) || Math.abs(v) > 1000000;
  * @param {number} hintLen 长度线索（名字标量 / 写过的最大下标 + 1）；-1 表示没有
  * @returns {{values:number[], trimmedFrom:number|null}}
  */
-function trimValues(values, shortestLen, hintLen = -1) {
+function trimValues(values, hintLen = -1) {
   let out = Array.isArray(values) ? values.slice() : [];
   let trimmedFrom = null;
-  const limit = Math.min(
-    shortestLen >= 2 ? shortestLen : Infinity,
-    hintLen >= 0 ? hintLen : Infinity,
-  );
+  const limit = hintLen >= 0 ? hintLen : Infinity;
   if (Number.isFinite(limit) && out.length > limit) {
     trimmedFrom = out.length;
     out = out.slice(0, Math.max(0, limit));
@@ -385,14 +382,61 @@ function hintLength(scalars) {
 }
 
 
-/* 视图判定：**运行期游标**优先，静态识别兜底。
+/**
+ * 源码里"每个数组被哪些变量当下标用过"：`a[i]` → a:{i}，`s.data[top]` → s.data:{top}。
+ *
+ * 为什么需要按数组建关系：以前长度线索是**全局**的（任何一个 n/top/len 都套给所有数组），
+ * 于是 `int a[2]={1,2}; int b[4]={10,20,30,40};` 里 b 被按 a 的长度裁成 `[10,20]`；
+ * 只声明一个无关的 `int n=1` 也会把 `a[4]` 裁成一格。长度线索必须能关联到**这个数组本身**。
+ */
+export function arrayIndexVarsOf(sourceLines) {
+  const map = new Map();
+  const text = String((sourceLines || []).join('\n'))
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ');
+  for (const m of text.matchAll(/([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(\[[^\]]*\]\s*(?:\[[^\]]*\]\s*)?)/g)) {
+    const base = m[1];
+    const inner = [...m[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1]).join(' ');
+    const set = map.get(base) || new Set();
+    for (const id of inner.matchAll(/[A-Za-z_]\w*/g)) set.add(id[0]);
+    map.set(base, set);
+  }
+  return map;
+}
+
+/** 能关联到**这个数组**的长度线索：只有被当作该数组下标的标量才算（含成员数组的裸名写法） */
+function hintLengthFor(name, scalars, indexVars) {
+  if (!scalars || !scalars.size || !indexVars) return -1;
+  const tail = tailName(name);
+  const own = new Set([...(indexVars.get(name) || []), ...(indexVars.get(tail) || [])]);
+  if (!own.size) return -1;
+  let best = -1;
+  for (const [key, value] of scalars) {
+    const k = tailName(key);
+    /* 两种写法都要认：裸 `top`（函数的）和 `s.top`（成员里的），按名字比或尾名比 */
+    if (!own.has(key) && !own.has(k)) continue;
+    const v = Number(value);
+    if (!Number.isFinite(v)) continue;
+    if (LEN_PLUS_ONE.test(k)) { if (v >= -1) best = Math.max(best, Math.round(v) + 1); }
+    else if (LEN_DIRECT.test(k)) { if (v >= 0) best = Math.max(best, Math.round(v)); }
+  }
+  return best;
+}
+
+
+/* 视图判定：**运行期游标**优先（且必须关联到该数组），静态识别兜底。
    为什么不能只看静态识别：`int q[8]` + `(rear + 1) % 8` 会被 base 的规则认成"哈希表"，
-   但它其实是循环队列。而 `top` 存在 / `front`+`rear` 同时存在，是程序自己写出来的事实。 */
-function viewOf(semantic, scalars) {
-  /* 按最后一段匹配（`s.top` 也算 top）：类的成员栈被插桩成带点的名字 */
+   但它其实是循环队列。而 `top` 存在 / `front`+`rear` 同时存在，是程序自己写出来的事实。
+   为什么必须"关联"：`int n=1; int a[4]={1,2,3,4};` 里 n 与 a 无关，不能把 a 当栈/裁成一格。 */
+function viewOf(semantic, scalars, indexVars) {
+  const own = indexVars instanceof Set ? indexVars : null;
   const has = (k) => {
-    if (!scalars) return false;
-    for (const [name, value] of scalars) if (tailName(name) === k && Number.isInteger(value)) return true;
+    if (!scalars || !own) return false;
+    for (const [name, value] of scalars) {
+      if (tailName(name) !== k) continue;
+      if (!own.has(name) && !own.has(tailName(name))) continue;
+      if (Number.isInteger(value)) return true;
+    }
     return false;
   };
   if (has('top') || has('sp')) return 'stack';
@@ -414,15 +458,13 @@ function semanticForView(view, semantic) {
   }
   return semantic || null;
 }
-/** 数组层：先按"最短数组长度 / 长度标量 / 尾部垃圾"裁剪，再挂上静态识别给出的方向语义 */
+/** 数组层：先按"这个数组自己的长度线索 / 写入与初始化记录"裁剪，再挂上静态识别给出的方向语义 */
 function arrayLayersOf(model, statics, scalars) {
   /* 指针数组（`HNode* bucket[7]`）只存地址：地址不是数据，画成一排数字纯属噪音。
      它们的链已经由 list/graph 层画出来了，这里直接跳过。 */
   const entries = [...model.arrays.entries()].filter(([, entry]) => entry.values.length && !entry.addrOnly);
   if (!entries.length) return [];
-  const lengths = entries.map(([, entry]) => entry.values.length).filter((n) => n >= 2);
-  const shortest = lengths.length ? Math.min(...lengths) : 0;
-  const hinted = hintLength(scalars);
+  const indexVars = model.arrayIndexVars || new Map();
   const semanticOf = (name) => {
     /* 成员数组叫 `s.data`，静态识别给的是 `data` —— 按最后一段也认一下，
        否则"顺序栈/循环队列"这些方向说明对类的成员数组永远不生效 */
@@ -437,15 +479,31 @@ function arrayLayersOf(model, statics, scalars) {
   };
   return entries.map(([name, entry]) => {
     const rawLength = entry.values.length;
-    /* 长度线索：① 名字表（top / n / len …）—— 只对常见写法有效；
-       ② **写入/初始化记录**：写过的最大下标 + 1，或声明时初始化过的长度。
-       两者都没有就保持采样长度（不按数值大小猜）。 */
+    /* 长度线索（**只认能关联到这个数组的**）：
+       ① 被当作该数组下标的标量（`s[top]` → top，`q[rear]` → rear，`a[n-1]` → n）；
+       ② 写入记录：写过的最大下标 + 1；
+       ③ 声明时的初始化长度。
+       三者都没有就保持采样长度 —— 不跨数组借长度，也不按数值大小猜。 */
+    const own = (() => {
+      const tail = tailName(name);
+      const a = indexVars.get(name);
+      const b = indexVars.get(tail);
+      if (!a && !b) return null;
+      const set = new Set([...(a || []), ...(b || [])]);
+      return set.size ? set : null;
+    })();
+    /* 长度线索（**只认能关联到这个数组的**）：
+       ① 被当作该数组下标的游标标量（`s[top]` → top、`q[rear]` → rear、`a[n-1]` → n）——
+          这是程序自己声明的"当前有效长度"，优先级最高（栈 pop 之后长度必须跟着缩）；
+       ② 没有游标线索时才退到"写过的最大下标 + 1 / 初始化长度"。 */
+    const hinted = hintLengthFor(name, scalars, indexVars);
     const writtenLen = Number.isInteger(entry.writtenMax) && entry.writtenMax >= 0 ? entry.writtenMax + 1 : -1;
     const initLen = Number.isInteger(entry.initLen) ? entry.initLen : -1;
     const hint = hinted >= 0 ? hinted : Math.max(writtenLen, initLen);
-    let { values, trimmedFrom } = trimValues(entry.values, shortest, hint);
-    if (entry.chars) {
-      /* 字符数组：尾部连续的 '\0' 是"字符串结束"、不是数据 —— 裁掉才能看清 "hello" 这 5 格 */
+    let { values, trimmedFrom } = trimValues(entry.values, hint);
+    if (entry.chars && entry.stringInit) {
+      /* 只有**字符串字面量初始化**的字符数组才把尾部 '\0' 当"字符串结束"裁掉 ——
+         二进制字符数据里的 0 是数据（评审报告 §4）。 */
       while (values.length > 1 && values[values.length - 1] === 0) values = values.slice(0, -1);
     }
     /* 中间还没初始化的格子：只看**声明/写入记录**（声明时没有初始化器、且这格还没写过 → 未知）。
@@ -455,7 +513,7 @@ function arrayLayersOf(model, statics, scalars) {
       ? values.map(charLabel)
       : values.map((v, i) => (inited(i) ? String(v) : '?'));
     const shown = values.map((v, i) => (labels[i] === '?' ? 0 : v));
-    const view = viewOf(semanticOf(name), scalars);
+    const view = viewOf(semanticOf(name), scalars, own);
     const semantic = semanticForView(view, semanticOf(name));
 
     /* 顺序栈 → 竖版栈视图（栈顶在上、带 top 指针）；画法一变，"从哪头进出"就不用解释了 */
@@ -711,6 +769,7 @@ export function buildLayerRun({ trace, sourceLines = [], preludeLines = 0, stati
   const events = trace?.events || [];
   const model = emptyModel();
   model.indexNames = indexNamesOf(sourceLines);
+  model.arrayIndexVars = arrayIndexVarsOf(sourceLines);
   model.charBase = charBaseOf(sourceLines);
   const openDump = new Map();        // var → {nodes: Map(idx→node), shape, root}
   const scalars = new Map();         // 标量快照（top / n / len …），用来裁数组的"实际长度"
@@ -816,11 +875,13 @@ export function buildLayerRun({ trace, sourceLines = [], preludeLines = 0, stati
         const mat = model.matrices.get(base) || { cells: new Map(), maxR: 0, maxC: 0, focus: null, written: new Set() };
         mat.uninit = true;
         model.matrices.set(base, mat);
-      } else if (String(shape) === '1') {
+      } else if (String(shape) === '1' || String(shape) === '3') {
         const n = Number(aText);
         if (Number.isFinite(n) && n >= 0) {
           const entry = model.arrays.get(base) || { values: [], focus: null, written: new Set(), seen: new Set() };
           entry.initLen = Math.max(entry.initLen ?? 0, Math.min(n, MAX_NODES));
+          /* shape 3 = 字符串字面量初始化：只有这种才允许把尾部 '\0' 当"字符串结束"裁掉 */
+          if (String(shape) === '3') entry.stringInit = true;
           model.arrays.set(base, entry);
         }
       } else if (String(shape) === '2') {

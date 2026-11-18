@@ -115,7 +115,15 @@ export async function buildPlusRun(id, variantId = 'v1', inputOverride = null) {
 
   return {
     runId: 'plus-' + uid.replace(/[^\w]+/g, '-') + '-' + variantId,
-    algorithm: isArray ? ARRAY_ALGORITHM : id,     // 数组族借用本项目的数组链路
+    /* 对外身份必须是**真实的 plus 示例 id**（评审报告 §3.10）：以前数组族被改写成 binary-search，
+       复制地址、问答上下文、日志里都看不出这是"插入排序"示例。
+       渲染适配（借用本项目数组链路）放在 createPlusView 里用独立参数，不改对外身份。 */
+    algorithm: PLUS_PREFIX + id,
+    /* 明确这是**本地预览**：后端没有这次运行的记录，所以步骤问答不可用（前端按 preview 关闭入口） */
+    preview: true,
+    /* 页面上明确说一句，别让用户以为问答/持久化也能用（评审报告 §3.10） */
+    notice: '本地示例预览：动画与步骤由本机生成，不接步骤问答，也没有后端运行记录。',
+    noticeIsInfo: true,
     plus: true,
     plusId: id,
     uid,

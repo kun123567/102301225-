@@ -47,6 +47,10 @@ function normalize(input) {
          它们是 Step v1 之外的**附加字段**，老调用方不带就相当于空数组。 */
       pointers: Array.isArray(input.pointers) ? input.pointers.map((p) => ({ id: p.id, label: p.label, index: p.index, node: p.node })) : [],
       focus: Array.isArray(input.focus) ? input.focus : [],
+      /* 标签也要带过来：字符数组的 `h`/`i`、未初始化格的 `?` 都存在 labels 里，
+         只取数值的话格子上会显示 104 / 0（评审报告 §3.5）。 */
+      labels: Array.isArray(input.labels) ? input.labels.slice() : null,
+      name: input.arrayName || null,
     };
   }
   // ② plus01&02 的 layer（data.values + roles.marks/pointers）
@@ -138,7 +142,9 @@ export function buildArrayFrame(input, opts = {}) {
     if (foundIndex != null && index === foundIndex) cell.classList.add('is-found');
     if (focusSet.has(index)) cell.classList.add('is-comparing');
 
-    const label = String(value);
+    /* 格子文字优先用层给的 labels（字符数组的 h/i、未初始化格的 ?）；
+       没有 labels 才退回数值文本（宿主 54 个示例走的就是这条，行为不变）。 */
+    const label = st.labels && st.labels[index] != null ? String(st.labels[index]) : String(value);
     const valueLabel = svgEl(doc, 'text', { class: 'prototype-array-value', x, y: value < 0 ? y + 13 : y - 6 }, label);
     if (label.length > Math.floor((spacing - 4) / 6)) {
       valueLabel.setAttribute('textLength', String(spacing - 4));

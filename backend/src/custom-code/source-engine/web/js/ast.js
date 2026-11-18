@@ -114,6 +114,18 @@
     if (/^(struct|union|enum|class)\s+[A-Za-z_]\w*\s+[A-Za-z_]\w*\s*(?:\[[^\]]*\]\s*)*[;=,\[]/.test(t)) return true;
     // 声明必须以 ; 或 { 或 = 结尾（不含函数调用）
     if (!/[;{=)]\s*$/.test(t)) return false;
+    /* 多词类型说明符：`static int a[3];` / `const unsigned long b = 0;` / `static struct Node n;`
+       —— 下面的通用正则只认"一个类型词 + 名字"，三词以上就漏了，
+       漏掉的声明会被当成语句包进块里（`{ __avc_t(4); static int a[3]; }`），
+       作用域一变，后面的 `a[0]` 直接编不过 → 整段代码报 stage:"instrument"。
+       逐个剥前缀再判（一次只剥一个词）：`unsigned long x` 剥到 `long x` 才成立。 */
+    let rest = t;
+    for (let n = 0; n < 6; n++) {
+      const mq = rest.match(/^(?:static|extern|const|register|volatile|inline|unsigned|signed|short|long|struct|union|enum|class)\s+/);
+      if (!mq) break;
+      rest = rest.slice(mq[0].length);
+      if (rest && isDeclLine(rest)) return true;
+    }
     // 形如 `TYPE name...` 或 `TYPE *name ...`
     const m = t.match(/^((?:[\w:]+\s*::\s*)?[A-Za-z_][\w:]*)(\s*<[^;{}()]*>)?\s*([*&\s]+)?([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*(?:=|;|\(|\{|,)/);
     if (!m) return false;

@@ -60,9 +60,9 @@ export function looksLikeCpp(code) {
 export function createEngineProgramRun({ request, now = () => Date.now() } = {}) {
   if (typeof request !== 'function') throw new Error('createEngineProgramRun 需要 request(path, opts)');
 
-  return async function runEngineProgram({ code, language = 'c', signal } = {}) {
+  return async function runEngineProgram({ code, language = 'c', signal, stdin = '' } = {}) {
     const data = await request('/api/detect/trace', {
-      body: { code, language, maxSteps: 4000, withLayers: true },
+      body: { code, language, maxSteps: 4000, withLayers: true, ...(stdin ? { stdin } : {}) },
       signal,
     });
     if (!data || data.ok !== true) {
@@ -87,13 +87,24 @@ export function createEngineProgramRun({ request, now = () => Date.now() } = {})
 
     /* 纯数组的示例走**本项目的数组链路**（`.bsviz-*` + 8 组 keyframes + 指针 FLIP），
        结构族才走 plus 的 svg 卡片。为什么要分：
-       数组窗口的"动画"是这套 CSS 带来的，全塞进 svg 卡片就只剩很淡的淡入，看起来像没有动画。 */
+       数组窗口的"动画"是这套 CSS 带来的，全塞进 svg 卡片就只剩很淡的淡入，看起来像没有动画。
+       **只有"每步恰好一个数组层"时才走数组链路**：宿主的数组视图一次只能画一个数组，
+       多数组时（评审报告 §3.5）以前只取第一个、后面那个直接消失 —— 那种情况交给 svg 卡片，
+       每层一张卡，名称/字符标签/未知标记都保留。 */
     const ARRAY_STYLES = new Set([1, 5, 6]);
     const allLayers = layerRun.steps.flatMap((step) => step.layers || []);
-    const isArrayRun = allLayers.length > 0 && allLayers.every((layer) => ARRAY_STYLES.has(layer.style));
+    const singleArray = layerRun.steps.every((step) => (step.layers || []).filter((l) => ARRAY_STYLES.has(l.style)).length <= 1);
+    const isArrayRun = allLayers.length > 0 && singleArray && allLayers.every((layer) => ARRAY_STYLES.has(layer.style));
+    const arrayLayerOf = (layers) => (layers || []).find((item) => Array.isArray(item.data && item.data.values)) || null;
     const valuesOf = (layers) => {
-      const layer = (layers || []).find((item) => Array.isArray(item.data && item.data.values));
+      const layer = arrayLayerOf(layers);
       return layer ? layer.data.values.slice() : [];
+    };
+    /* 标签（字符数组的 `h`/`i`、未初始化格的 `?`）与数组名必须一起带给宿主：
+       只传数值的话（评审报告 §3.5）浏览器里会把 `h` 画成 104、把 `?` 画成 0。 */
+    const labelsOf = (layers) => {
+      const layer = arrayLayerOf(layers);
+      return layer && Array.isArray(layer.data.labels) ? layer.data.labels.slice() : [];
     };
     /* 引擎每步给的"谁在动"：roles.pointers（数组游标 / 结构指针）与 roles.focus1（本步改的格子）。
        数组链路（.bsviz-*）原本只认二分查找的 L/R/M，这两个字段是**附加**的：
@@ -110,12 +121,20 @@ export function createEngineProgramRun({ request, now = () => Date.now() } = {})
     };
 
     const lastIndex = layerRun.steps.length - 1;
+    /* 轨迹被截断（步骤超过 maxSteps）时，末步**不是**程序的最终结果：
+       播放器可以"播到轨迹末尾"，但不能标成 done，也不能把中间状态当 result（评审报告 §3.6）。 */
+    const truncated = Boolean(data.truncated);
     const steps = layerRun.steps.map((step, index) => {
       const line = step.lineId || '1';
       const values = valuesOf(step.layers);
       const prevValues = index > 0 ? valuesOf(layerRun.steps[index - 1].layers) : values;
       const changed = values.some((v, i) => v !== prevValues[i]);
       const roles = rolesOf(step.layers);
+      const layer = arrayLayerOf(step.layers);
+      const isLast = index === lastIndex;
+      /* 变量面板只显示**可证实**的东西：本步行号、当前聚焦格、游标。
+         以前 `writes: 0` 是写死的，明明有写入也显示 0（评审报告 §3.9）。 */
+      const focusIndex = roles.focus.length ? roles.focus[0] : null;
       return {
         schemaVersion: '1.0',
         algorithm: 'custom-engine',
@@ -126,23 +145,47 @@ export function createEngineProgramRun({ request, now = () => Date.now() } = {})
         /* 数组族：把值放进 step.array，本项目的 createVisualization 才能画格子；
            结构族留空、用 layers 走 svg 卡片 */
         array: isArrayRun ? values : [],
+        arrayName: layer ? String(layer.title || layer.id || '').replace(/^arr:/, '') : null,
+        labels: isArrayRun ? labelsOf(step.layers) : [],
         target: null,
-        variables: { line: Number(line) || 1, index: null, writes: 0 },
+        /* 没实现的统计就写 null，不冒充 0 */
+        variables: {
+          line: Number(line) || 1,
+          index: focusIndex,
+          writes: isLast && !truncated ? 0 : null,
+          pointers: roles.pointers.map((p) => (p.index != null ? p.id + '=' + p.index : p.id)),
+        },
         /* 数组链路用的附加字段（不参与 Step v1 语义）：本步的游标 + 被改的格子 */
         pointers: isArrayRun ? roles.pointers : [],
         focus: isArrayRun ? roles.focus : [],
         description: '第 ' + line + ' 行',
         note: '第 ' + line + ' 行',
-        done: index === lastIndex,
-        result: index === lastIndex && isArrayRun ? values : null,
+        done: isLast && !truncated && !data.abnormalExit,
+        /* 截断 / 异常退出时不能把这一步的数组当成"程序的最终结果" */
+        result: isLast && isArrayRun && !truncated && !data.abnormalExit ? values : null,
         layers: step.layers,
       };
     });
+    const truncatedNote = truncated
+      ? `轨迹被截断（只采到前 ${layerRun.steps.length} 步）：末步是最后观测到的状态，不是程序的最终结果。`
+      : null;
+    /* §4 的三条"限制要写在界面上"：没有结构 / 有采样上限 / 用了 stdin 但页面没有输入框 */
+    const noStructureNote = allLayers.length === 0
+      ? '这段代码没有可展示的数据结构（只有标量与行轨迹）——空白不是故障。'
+      : null;
+    const sampledNote = allLayers.some((l) => (l.data && Array.isArray(l.data.values) && l.data.values.length >= 16)
+      || (l.data && Array.isArray(l.data.cells) && l.data.cells.length >= 16))
+      ? '数组按最多 16 格采样显示（更长的数组只画前 16 格），不是完整输入。'
+      : null;
+    const stdinNote = /\b(?:scanf|fscanf|gets|getchar|cin)\s*[\(>]/.test(String(code || '')) && !stdin
+      ? '这段代码要读标准输入，但当前页面没有 stdin 输入框：请把数据直接写在代码里（或从接口带 stdin 参数）。'
+      : null;
     return {
-      /* 说明优先级：异常退出（要人知道轨迹不完整）> 插桩降级 > 后端附带的其它说明 */
-      notice: exitNote || degradedNote || data.note || null,
-      noticeIsInfo: Boolean(data.autoSwitched) && !degradedNote && !exitNote,
+      /* 说明优先级：异常退出 > 截断 > 没有结构 > 插桩降级 > 采样上限 > stdin > 后端其它说明 */
+      notice: exitNote || truncatedNote || noStructureNote || degradedNote || sampledNote || stdinNote || data.note || null,
+      noticeIsInfo: Boolean(data.autoSwitched || noStructureNote || sampledNote || stdinNote) && !degradedNote && !exitNote && !truncated,
       abnormalExit: Boolean(data.abnormalExit),
+      truncated,
       exitCode: data.exitCode ?? null,
       langUsed: data.langUsed || language,
       runId: 'engine-' + now().toString(36),

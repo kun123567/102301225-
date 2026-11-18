@@ -346,6 +346,15 @@ function declWithInit(t, types) {
   return !!m && types.has(m[1]);
 }
 
+/** 这个声明符本身有没有初始化器？`int a[2], b[2] = {1,2};` → a 没有、b 有。
+ *  评审报告 §3.4：不能只看整行有没有等号 —— 同行里别的变量带初始化器，会把没有的也当已初始化
+ *  （实测 `int leftMax[32], rightMax[32], ans = 0, i;` 里 leftMax 被当成"已初始化 16 格"，于是裁不掉尾巴）。
+ */
+function declaratorHasInit(lineText, name) {
+  const re = new RegExp('\\b' + name + '\\s*(?:\\[[^\\]]*\\]\\s*)*=(?!=)');
+  return re.test(String(lineText || ''));
+}
+
 /** 解析声明语句里的变量 */
 function parseDecl(line, structs) {
   const out = [];
@@ -430,6 +439,21 @@ function collectDefines(codeLines) {
   return map;
 }
 
+/**
+ * 记录**所有**宏的宏体文本（不要求是数字）。
+ * 用途：判"下标表达式可证明无副作用"时要看宏会不会展开成函数调用/复合表达式 ——
+ * `#define IDX nextIndex()` 这种在源码里看着像标识符，展开后却有副作用。
+ */
+function collectMacroBodies(codeLines) {
+  const map = {};
+  for (const l of codeLines) {
+    const m = String(l).match(/^\s*#\s*define\s+([A-Za-z_]\w*)(\([^)]*\))?\s*(.*)$/);
+    if (!m) continue;
+    map[m[1]] = m[2] ? '(' + m[2].slice(1) + ' ' + m[3] : m[3];
+  }
+  return map;
+}
+
 function arrayDims(txt, defines) {
   const dims = [];
   const re = /\[([^\]]*)\]/g;
@@ -445,17 +469,45 @@ function arrayDims(txt, defines) {
 }
 
 /**
+ * 下标表达式是否"可证明无副作用"。
+ *
+ * 为什么必须证明：写入标记要在赋值语句**前面**再求值一次下标，如果下标里有函数调用、
+ * 自增自减、赋值或宏展开成调用，就等于把副作用执行了两遍 —— 插桩改变了程序行为。
+ * 实测：`a[nextIndex()] = 7;`（nextIndex 里 cursor++）原程序输出 `1 7 0`，插桩后变成 `2 0 7`。
+ *
+ * 只放行：标识符、数字/字符字面量、`[] () . -> + - * / % & | ^ ~ ! < > ? :` 这些运算符组合，
+ * 并且**任何标识符都不直接跟 `(`**（那可能是函数调用/构造），也不在 #define 里被展开成带括号的表达式。
+ * 拿不准就不发标记（宁可少一条记录，也不能改程序行为）。
+ */
+const PURE_INDEX_CHARS = /^[A-Za-z_0-9\s[\]().+\-*/%&|^~!<>=?:,]*$/;
+function isPurityProvable(expr, macros) {
+  const text = String(expr || '').trim();
+  if (!text) return false;
+  if (!PURE_INDEX_CHARS.test(text)) return false;
+  if (/(\+\+|--|=(?![=])|->\s*\()/.test(text)) return false;
+  /* `f(x)` / `obj.method(x)` / `T(x)` 这类：标识符后面直接跟左括号 → 当作调用，跳过 */
+  const ids = [...text.matchAll(/([A-Za-z_]\w*)\s*\(/g)].map((m) => m[1]);
+  if (ids.length && ids.some((id) => id !== 'sizeof')) return false;
+  const bodies = macros || {};
+  for (const m of text.matchAll(/([A-Za-z_]\w*)/g)) {
+    const body = bodies[m[1]];
+    /* 宏体里只要带括号/自增/赋值，就可能展开成调用或有副作用的表达式 → 不发标记 */
+    if (body != null && /[(){}]|\+\+|--|=(?!=)/.test(String(body))) return false;
+  }
+  return true;
+}
+
+/**
  * 语句里的**数组写入标记**：`a[i] = …` / `a[i]++` / `++a[i]` / `g[i][j] += …` → W 事件。
  *
  * 为什么要它：判断"这格是不是未初始化"以前只能看数值大小（|v| > 1e6 算垃圾），
  * 合法的大整数（2000000）就被误删了。写入记录是**事实**，不用猜。
  *
- * 安全边界：
- *   · 下标表达式里出现 `++/--/=`（有副作用）就不发标记 —— 会被求值两次，改变程序行为；
- *   · 只认"行首就是赋值目标"的简单语句（一行多语句本来就不插桩）。
+ * 安全边界（评审报告 P1 第 1 条）：下标必须**可证明无副作用**才发（见 isPurityProvable），
+ * 函数调用、宏展开、自增自减、赋值一律跳过 —— 宁可少一条记录，也不能让插桩改变程序结果。
  * @returns {string[]} 要插在语句前面的 C 片段
  */
-function writeMarkCalls(lineNo, text, structArrayFields) {
+function writeMarkCalls(lineNo, text, structArrayFields, defines) {
   let s = String(text || '').trim().replace(/;$/, '').trim();
   const prefix = s.match(/^(\+\+|--)(?=\s*[A-Za-z_])/);
   if (prefix) s = s.slice(prefix[1].length).trim();
@@ -469,8 +521,8 @@ function writeMarkCalls(lineNo, text, structArrayFields) {
   const field = m[3] || null;
   const idxTexts = [...m[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
   if (!idxTexts.length || idxTexts.length > 2) return [];
-  if (idxTexts.some((t) => /(\+\+|--|=(?!=))/.test(t))) return [];      // 有副作用：不发，避免求值两次
-  if (idxTexts.some((t) => !t)) return [];
+  /* 下标必须两处都无副作用：不然"标记一次 + 赋值一次"会把副作用做两遍 */
+  if (!idxTexts.every((t) => isPurityProvable(t, defines))) return [];
   if (idxTexts.length === 1) {
     const at = `(int)(${idxTexts[0]})`;
     /* `a[i].key = x` → 记到字段视图 `a.key` 上（字段伪变量就是按这个名字出层的） */
@@ -481,6 +533,62 @@ function writeMarkCalls(lineNo, text, structArrayFields) {
     return [`__avc_w(${lineNo},"${name}",${at});`];
   }
   return [`__avc_w2(${lineNo},"${name}",(int)(${idxTexts[0]}),(int)(${idxTexts[1]}));`];
+}
+
+/**
+ * 库函数写入：`scanf("%d", &a[i])`、`memcpy(a, b, sizeof(a))`、`memset(a, 0, sizeof(a))`。
+ *
+ * 为什么必须覆盖：这些写入不经过赋值语句，`W` 标记抓不到；"首次观测"又不算写入，
+ * 于是 `int a[2]; scanf("%d %d", &a[0], &a[1]);` 的格子会一直停在"未知"（实测显示 `? ?`）。
+ *
+ * 保守边界：
+ *   · `scanf` 只认 `&数组[表达式]` 形式的参数（下标同样要可证明无副作用）；
+ *   · `memcpy/memmove/memset` 只有**尺寸表达式里带 sizeof 且指向该数组**时才算"整块已写入"，
+ *     部分长度（`memset(a, 0, k * sizeof(int))`）保持未知 —— 证明不了就不能当已初始化。
+ * @returns {string[]}
+ */
+function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
+  const s = String(text || '');
+  const out = [];
+  const marks = new Set();
+
+  /* scanf / fscanf：&a[i] / &g[i][j] */
+  for (const call of s.matchAll(/\b(?:scanf|fscanf)\s*\(/g)) {
+    const open = call.index + call[0].length - 1;
+    const close = matchParen(s, open);
+    if (close < 0) continue;
+    const args = s.slice(open + 1, close);
+    for (const ref of args.matchAll(/&\s*([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)/g)) {
+      const name = ref[1];
+      const idxTexts = [...ref[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
+      if (!idxTexts.length || idxTexts.length > 2) continue;
+      if (!idxTexts.every((t) => isPurityProvable(t, macroBodies))) continue;
+      const key = name + '|' + idxTexts.join(',');
+      if (marks.has(key)) continue;
+      marks.add(key);
+      if (idxTexts.length === 1) out.push(`__avc_w(${lineNo},"${name}",(int)(${idxTexts[0]}));`);
+      else out.push(`__avc_w2(${lineNo},"${name}",(int)(${idxTexts[0]}),(int)(${idxTexts[1]}));`);
+    }
+  }
+
+  /* memcpy / memmove / memset：整块初始化（只在 sizeof 覆盖整个数组时） */
+  for (const call of s.matchAll(/\b(memcpy|memmove|memset)\s*\(\s*&?\s*([A-Za-z_]\w*)\s*[,)]/g)) {
+    const name = call[2];
+    const dims = dimsOf && dimsOf.get(name);
+    if (!dims || !dims.length) continue;
+    const open = s.indexOf('(', call.index);
+    const close = open >= 0 ? matchParen(s, open) : -1;
+    if (close < 0) continue;
+    const args = s.slice(open + 1, close);
+    /* 尺寸参数里要有 sizeof 且提到这个数组（`sizeof(a)` / `sizeof a`） */
+    if (!new RegExp('sizeof\\s*\\(?\\s*' + name + '\\b').test(args)) continue;
+    const key = name + '|all';
+    if (marks.has(key)) continue;
+    marks.add(key);
+    if (dims.length === 1) out.push(`__avc_init(${lineNo},"${name}",${dims[0]});`);
+    else out.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`);
+  }
+  return out;
 }
 
 function watchCalls(line, v) {
@@ -497,16 +605,32 @@ function watchCalls(line, v) {
     /* 结构体字段伪变量（`s.data`）不发：它们的写入发生在**成员函数里**（那时只有裸名字 `data`），
        名字对不上，发"未初始化"记录只会把好好的字段全打成未知。字段的初始化交给构造函数。 */
     if (v.fieldOf) return [];
+    /* 全局 / static 存储期：C 规则保证隐式零初始化 → 全部格子都算已初始化。
+       以前只看"声明行有没有等号"，于是 `int a[3];`（全局）明明是 0 0 0 却被标成三个未知。 */
+    if (v.staticStorage) return dims.length === 1
+      ? [`__avc_init(${L},${q(n)},${dims[0]});`]
+      : [`__avc_init2(${L},${q(n)},${dims[0]},${dims[1]});`];
     if (!v.hasInit) return [`__avc_uninit(${L},${q(n)});`];
-    if (dims.length === 1) return [`__avc_init(${L},${q(n)},${dims[0]});`];
+    /* 字符串字面量初始化的字符数组（`char s[] = "hi";`）单独标：只有这种才允许按 '\0' 裁尾巴，
+       二进制字符数组里的 0 是数据，不能删（评审报告 §4）。 */
+    if (dims.length === 1) {
+      return [v.stringInit ? `__avc_initstr(${L},${q(n)},${dims[0]});` : `__avc_init(${L},${q(n)},${dims[0]});`];
+    }
     if (dims.length >= 2) return [`__avc_init2(${L},${q(n)},${dims[0]},${dims[1]});`];
     return [];
   };
   if (v.kind === 'i') {
-    return [...(v.uninitView ? [`__avc_uninit(${L},${q(v.viewBase || n)});`] : []), `__avc_vi(${L},${q(n)},(long)(${expr}));`];
+    /* 结构体数组字段视图：继承所属对象的初始化信息（有初始化器 → 已初始化；没有 → 未知） */
+    const marks = v.uninitView
+      ? [`__avc_uninit(${L},${q(v.viewBase || n)});`]
+      : (v.hasInit && v.fieldCount ? [`__avc_init(${L},${q(v.viewBase || n)},${v.fieldCount});`] : []);
+    return [...marks, `__avc_vi(${L},${q(n)},(long)(${expr}));`];
   }
   if (v.kind === 'd') {
-    return [...(v.uninitView ? [`__avc_uninit(${L},${q(v.viewBase || n)});`] : []), `__avc_vd(${L},${q(n)},(double)(${expr}));`];
+    const marks = v.uninitView
+      ? [`__avc_uninit(${L},${q(v.viewBase || n)});`]
+      : (v.hasInit && v.fieldCount ? [`__avc_init(${L},${q(v.viewBase || n)},${v.fieldCount});`] : []);
+    return [...marks, `__avc_vd(${L},${q(n)},(double)(${expr}));`];
   }
   if (v.kind === 's') {
     // 字符数组：既发整串（变量窗可读），也发逐下标（数组窗要按 a[i] 聚格）
@@ -745,6 +869,7 @@ function instrument(source, opt) {
   const code = stripComments(source).split(/\r?\n/);
   const structs = parseStructs(code);
   const defines = collectDefines(code);
+  const macroBodies = collectMacroBodies(code);
   const typeSet = typeNameSet(code);
   const structRanges = structs.map(s => ({ start: s.start, end: s.end, ref: s }));
 
@@ -772,6 +897,8 @@ function instrument(source, opt) {
   const globals = [];
   /* 结构体数组（`Item a[4]`）→ 它的字段视图名，写入标记据此分发到 `a.key` / `a.aux`（整条拷贝时全都算写过） */
   const structArrayFields = new Map();
+  /* name → 采样维度：给 scanf/memcpy/memset 的写入标记用 */
+  const arrayDimsOf = new Map();
   for (let i = 0; i < code.length; i++) {
     /* 结构体/类的"成员声明区"跳过；但**成员函数体内部**要照常收集局部变量
        （`Trie* node = this;` / `int ch = ...` 全在这里，不收集就没有每一步的值） */
@@ -794,10 +921,17 @@ function instrument(source, opt) {
         struct: st || null,
         /* 声明行里带初始化器（`int a[3] = {1,2,3};`）→ 每一格都已有值。
            折叠层用它区分"合法的大整数"和"未初始化的内存"。 */
-        hasInit: /=/.test(String(line || '')),
+        /* 这个**声明符本身**有没有初始化器：`int a[2], b[2] = {1,2};` → a 没有、b 有。
+           评审报告 §3.4：不能只看整行有没有等号，否则同行里别的变量的初始化器会把没有的也当已初始化。 */
+        hasInit: declaratorHasInit(line, d.name),
+        /* 声明用字符串字面量初始化（`char s[] = "hi";`）：只有这种数组才按 '\0' 裁尾巴 */
+        stringInit: /=\s*"/.test(String(line || '')),
+        /* 存储期：全局/文件作用域，或声明里带 static/extern → C 保证隐式零初始化 */
+        staticStorage: (!fn || /^\s*(?:static|extern)\b/.test(String(line || ''))),
       });
       if (!fn) globals.push(rec);
       else vars.push(rec);
+      if (rec.dims && rec.dims.length) arrayDimsOf.set(rec.name, rec.dims);
 
       /* 结构体字段也要能看见：S.data[i] / S.top
        * 此前只观测"函数首层普通变量"，于是 SqStack.data/SqList.elem 这类字段完全不可见，
@@ -831,7 +965,10 @@ function instrument(source, opt) {
               kind: isFloat ? 'd' : 'i', dims: null,
               /* 对象是**结构体数组**：这些字段视图在写之前是未初始化的，
                  名字和写入标记（`a.key`）对得上，所以可以放心发"未初始化"记录 */
-              uninitView: true,
+              /* 字段视图继承所属结构体数组的初始化信息：带初始化器就不该标未知 */
+              uninitView: !rec.hasInit,
+              hasInit: rec.hasInit,
+              fieldCount: count,
               viewBase: rec.name + '.' + f.name,
               declLine: rec.declLine, scopeStart: rec.scopeStart, scopeEnd: rec.scopeEnd,
               struct: null, structTag: null,
@@ -1135,7 +1272,10 @@ function instrument(source, opt) {
     /* 数组写入标记（`a[i] = …` / `a[i]++` / `g[i][j] = …`）：插在语句**前面**，
        这样下标表达式还是"写入前"的值（`a[j] = a[j+1]` 的 j 不会被语句改掉）。
        折叠层靠它区分"写过的格子"和"从没初始化过的格子"，不再拿数值大小猜垃圾。 */
-    const writeMark = writeMarkCalls(lineNo, trimmed, structArrayFields);
+    const writeMark = [
+      ...writeMarkCalls(lineNo, trimmed, structArrayFields, macroBodies),
+      ...libWriteCalls(lineNo, trimmed, arrayDimsOf, macroBodies),
+    ];
 
     if (declLike) {
       // 声明行完全不插桩：一旦在声明后追加语句，后面的声明就不再处于块首（C89 违规），
