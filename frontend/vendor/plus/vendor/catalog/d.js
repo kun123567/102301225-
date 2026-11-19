@@ -1,0 +1,105 @@
+/** 算法包 D · 查找与哈希（8 项 × 3 变体 = 24 个演示） */
+export const PKG_D = {
+  id: 'D',
+  name: '查找与哈希',
+  doc: 'docs/team/final/tasks/d-search-hash.md',
+  title: '查找与哈希',
+  items: [
+    {
+      id: 'linear-search', title: '顺序查找', points: 1,
+      ds: ['sqlist'], style: 1,
+      focus: '比较下标、当前值、命中/未命中结论',
+      events: ['init', 'compare', 'hit', 'miss', 'done'],
+      path: 'algorithms/d/linear-search.js',
+      variants: [
+        { id: 'v1', name: '朴素 for 循环', note: '从 0 逐项比较，遇首个相等即返回下标，遍历完返回 -1' },
+        { id: 'v2', name: '哨兵版', note: '把目标放到 a[0] 作哨兵，从尾部往前扫，省掉每次的下标越界判断' },
+        { id: 'v3', name: '全量命中版', note: '不早停，收集所有相等元素下标（重复键场景），返回下标列表' },
+      ],
+    },
+    {
+      id: 'block-search', title: '分块查找', points: 1,
+      ds: ['sqlist', 'grid2d'], style: 1,
+      focus: '索引项比较、选中块范围、块内逐项扫描',
+      events: ['init', 'compare-index', 'select-block', 'compare-in-block', 'hit', 'miss', 'skip-empty', 'done'],
+      path: 'algorithms/d/block-search.js',
+      variants: [
+        { id: 'v1', name: '索引顺序查找', note: '索引表顺序比较，找第一个最大值不小于目标的块，再块内顺序扫描' },
+        { id: 'v2', name: '索引折半 + 块内顺序', note: '索引表折半选块（索引按最大值有序），块内仍顺序扫描' },
+        { id: 'v3', name: '索引折半 + 块内折半', note: '块内也有序时块内再折半，展示三重收敛与比较次数对比' },
+      ],
+    },
+    {
+      id: 'avl-tree', title: '平衡二叉树', points: 3,
+      ds: ['tree'], style: 9,
+      focus: '高度/平衡因子、失衡点、LL/RR/LR/RL 四类旋转、旋转前后链接',
+      events: ['init', 'descend', 'insert-node', 'update-height', 'unbalanced', 'rotate-ll', 'rotate-rr', 'rotate-lr', 'rotate-rl', 'done'],
+      path: 'algorithms/d/avl-tree.js',
+      variants: [
+        { id: 'v1', name: '递归高度 + 四类旋转', note: '回溯时现算高度，按失衡方向分 LL/RR/LR/RL 四种情形旋转' },
+        { id: 'v2', name: '平衡因子 + parent 指针', note: '节点存 bf（左高-右高），自上而下调整并沿 parent 向上修复' },
+        { id: 'v3', name: '统一旋转（单/双）', note: '用"三次单旋转"的统一写法实现双旋转，展示与四类分支法的等价性' },
+      ],
+    },
+    {
+      id: 'red-black-tree', title: '红黑树', points: 3,
+      ds: ['tree'], style: 9,
+      focus: '插入点、父/叔/祖父、颜色、旋转与变色、根置黑、黑高检查',
+      events: ['init', 'descend', 'insert-red', 'case-uncle-red', 'case-uncle-black', 'rotate-left', 'rotate-right', 'recolor', 'root-black', 'done'],
+      path: 'algorithms/d/red-black-tree.js',
+      variants: [
+        { id: 'v1', name: 'CLRS 插入修复', note: '新节点染红；父红时按叔红（变色上溯）/叔黑（旋转+变色）两类情形修复' },
+        { id: 'v2', name: '左倾红黑树 LLRB', note: '只允许左倾红链，用 rotateLeft/rotateRight/flipColors 三原语完成插入修复' },
+        { id: 'v3', name: '自顶向下分裂 4- 节点', note: '下降途中遇到 4- 节点（黑带两红）先分裂变色，插入后只需一次旋转收尾' },
+      ],
+    },
+    {
+      id: 'hash-linear-probing', title: '哈希线性探测', points: 1,
+      ds: ['hash'], style: 1,
+      focus: '初始槽 h(k)、探测次序 (h+i) mod m、冲突与回绕、表满终止',
+      events: ['init', 'hash', 'probe', 'collision', 'wrap', 'place', 'hit', 'miss', 'full', 'done'],
+      path: 'algorithms/d/hash-linear-probing.js',
+      variants: [
+        { id: 'v1', name: '插入 + 查找基础版', note: '遇空槽或同键停止，最多 m 次探测；重复键不再占新槽' },
+        { id: 'v2', name: '带删除标记（墓碑）', note: '删除写 DELETED 标记，查找需越过墓碑继续探测，插入可复用墓碑槽' },
+        { id: 'v3', name: '装填因子扩容重散列', note: '装填因子超阈值时容量翻倍并重新散列全部键，展示扩容前后槽位迁移' },
+      ],
+    },
+    {
+      id: 'hash-quadratic-probing', title: '哈希平方探测', points: 1,
+      ds: ['hash'], style: 1,
+      focus: '探测公式、i 值、探测槽、重复访问、序列耗尽',
+      events: ['init', 'hash', 'probe', 'collision', 'repeat-slot', 'exhausted', 'place', 'miss', 'done', 'hit' ],
+      path: 'algorithms/d/hash-quadratic-probing.js',
+      variants: [
+        { id: 'v1', name: '正平方增量', note: '探测序列 (h + i²) mod m，i=0..m-1，最多 m 次' },
+        { id: 'v2', name: '交替正负增量', note: '探测序列 (h ± i²) mod m 交替取正负，覆盖范围更大' },
+        { id: 'v3', name: '耗尽检测版', note: '记录已访问槽集合，一旦重复访问即报"探测序列耗尽"，即使表里还有空槽' },
+      ],
+    },
+    {
+      id: 'hash-double-hashing', title: '哈希双散列', points: 2,
+      ds: ['hash'], style: 1,
+      focus: 'h1、h2（步长）、(h1+i·h2) mod m 的槽位序列、未命中终止',
+      events: ['init', 'hash1', 'hash2', 'probe', 'collision', 'place', 'hit', 'miss', 'done'],
+      path: 'algorithms/d/hash-double-hashing.js',
+      variants: [
+        { id: 'v1', name: 'h2 = 1 + k mod (m-1)', note: '步长恒与表长互素（m 取素数），保证探测能覆盖全表' },
+        { id: 'v2', name: 'h2 = q - (k mod q)', note: '取小于 m 的素数 q，步长落在 [1,q] 内，展示与 v1 的步长差异' },
+        { id: 'v3', name: '扩容 + 重散列', note: '装填因子超限时扩容并重算全部键的 h1/h2，展示槽位整体迁移' },
+      ],
+    },
+    {
+      id: 'hash-chaining', title: '哈希拉链法', points: 2,
+      ds: ['hashchain'], style: 3,
+      focus: '桶号、链内逐节点比较、插入位置（头/尾）、空桶查询',
+      events: ['init', 'hash', 'bucket', 'compare-node', 'append', 'prepend', 'hit', 'miss', 'done'],
+      path: 'algorithms/d/hash-chaining.js',
+      variants: [
+        { id: 'v1', name: '头插法', note: '新键插入桶链头部，插入 O(1)，链内顺序与插入顺序相反' },
+        { id: 'v2', name: '尾插法', note: '新键追加到桶链尾部，链内保持插入顺序，查找平均比较次数一致' },
+        { id: 'v3', name: '桶内有序链', note: '桶内链按 key 升序维护，可在桶内提前终止查找' },
+      ],
+    },
+  ],
+};

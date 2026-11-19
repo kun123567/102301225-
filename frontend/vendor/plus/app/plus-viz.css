@@ -1,0 +1,181 @@
+/* plus-viz.css -- plus01&02 非数组族的**新增原型**样式（只新增，不改本项目既有 CSS）
+ * 选择器都用 avc-* / plus-viz 前缀，避免和 .bsviz-* 冲突。 */
+
+.plus-viz {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  overflow: auto;
+  background: #fff;
+}
+
+/* 卡片：与 plus01&02 里 .viz-host .canvas-card 同一套（本项目没有这些类，必须自带，
+   否则结构族的卡头/边框/间距全丢，看着就像"什么都没画出来"）。
+   注意选择器都限定在 .plus-viz 下，不会碰到本项目既有的 .bsviz-* 样式。 */
+.plus-viz .canvas-card {
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.plus-viz .canvas-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border-bottom: 1px solid #e3e8ee;
+  font-size: 11px;
+  color: #6b7686;
+}
+
+.plus-viz .canvas-card header b { color: #172033; font-size: 12px; }
+
+.plus-viz > .canvas-card + .canvas-card { margin-top: 12px; }
+/* anim.css -- plus01&02 的**动画挂载点**：全部挂在 svg 元素上（不再是 canvas 整帧重绘）
+ *
+ * 两层结构（与 app/prim-dom.js 一一对应，别合并回一层）：
+ *   .avc-pos              外层：只负责定位 style.transform=translate(x,y) → 这里给它 transition
+ *   .avc-el               内层：只负责状态动画（enter / exit / flash / dim）
+ *
+ * 为什么要分两层：CSS 动画在层叠里**高于 inline style**，`animation-fill-mode: both`
+ * 会让最后一帧的 `transform: scale(1)` 永久压住定位层的 `translate(x,y)`——
+ * 表现就是"元素停在原点、越往下越错位、最后看不见"。
+ * 定位与动画分层后，动画层怎么缩放都动不到定位层的 translate。
+ *
+ * 动画只做透明度/缩放这类"不改变布局"的变化，几何仍由引擎算。
+ */
+
+.avc-svg-wrap {
+  position: relative;
+  width: 100%;
+  background: #fff;
+  border-radius: 0 0 10px 10px;
+  overflow: hidden;
+}
+
+.avc-svg {
+  display: block;
+  width: 100%;
+  background: #fff;
+}
+
+/* 定位层：位置补间（唯一允许碰 transform 的地方） */
+.avc-pos {
+  transition: transform 280ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity 200ms ease;
+}
+
+/* 动画层：缩放围绕自身盒子中心 */
+.avc-el {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 200ms ease;
+}
+
+.avc-el > text,
+.avc-el text {
+  font-family: inherit;
+  user-select: none;
+}
+
+@keyframes avc-enter-kf {
+  from { opacity: 0; transform: scale(0.86); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes avc-exit-kf {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.9); }
+}
+
+@keyframes avc-flash-kf {
+  0%   { opacity: 1; }
+  40%  { opacity: 0.45; }
+  100% { opacity: 1; }
+}
+
+/* dim 不循环：透明度已由 inline style 表达，这里只保证平滑过渡（不新增动效） */
+
+.avc-pos.avc-move   { transition-duration: 300ms; }   /* 位置补间（transform transition 挂在定位层） */
+.avc-el.avc-move    { transition-duration: 300ms; }
+.avc-el.avc-enter   { animation: avc-enter-kf 260ms ease-out; }
+.avc-el.avc-exit    { animation: avc-exit-kf 200ms ease-in forwards; pointer-events: none; }
+.avc-el.avc-flash   { animation: avc-flash-kf 320ms ease-in-out 1; }
+.avc-el.avc-dim     { animation: none; transition: opacity 200ms ease; }
+
+/* 尊重系统"减少动态效果" */
+@media (prefers-reduced-motion: reduce) {
+  /* 只关"位移/缩放"，**保留透明度变化**（全关掉会让整幅图像没有动画） */
+  .avc-pos { transition: none; }
+  .avc-el { transition: opacity 200ms ease; }
+  .avc-el.avc-enter { animation: avc-fade-kf 220ms ease-out; }
+  .avc-el.avc-flash { animation: avc-flash-kf 320ms ease-in-out 1; }
+  .avc-el.avc-exit { animation: avc-fadeout-kf 200ms ease-in forwards; }
+}
+
+@keyframes avc-fade-kf {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes avc-fadeout-kf {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+ * 示例库输入区（#plus-input-fields）
+ *
+ * 只在选中 plus 示例时出现。这里只新增 plus-* / #plus-* 选择器，
+ * 不重定义本项目的 .input-panel / .input-actions / label 规则；
+ * 布局照样例沿用 .input-panel 的网格（run-form.plus-input 借 sorting-input 的两列法）。
+ * ------------------------------------------------------------------------- */
+.input-panel.plus-input { grid-template-columns: minmax(0, 1fr); }
+.plus-input .input-actions { grid-column: 1 / -1; justify-content: flex-end; }
+
+#plus-input-fields {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fbfaff;
+}
+
+#plus-input-fields > label { min-width: 0; }
+#plus-input-fields .plus-input-label { grid-column: 1 / -1; }
+#plus-input-fields #plus-help { grid-column: 1 / -1; font-size: 11px; }
+
+#plus-input-fields select { height: 34px; font-size: 12px; padding: 0 8px; }
+
+#plus-input {
+  display: block;
+  width: 100%;
+  min-height: 62px;
+  max-height: 190px;
+  resize: vertical;
+  font: 12px/1.65 Consolas, monospace;
+  padding: 9px 11px;
+  white-space: pre;
+  overflow: auto;
+}
+
+@media (max-width: 540px) {
+  .input-panel.plus-input { grid-template-columns: minmax(0, 1fr); }
+  #plus-input-fields { grid-template-columns: minmax(0, 1fr); padding: 10px; }
+}
+
+/* ---------------------------------------------------------------------------
+ * 自由指针（自定义代码的 i / j / k / cur …）
+ *
+ * 只新增选择器 `.prototype-marker.is-free` —— 它只由 vendor/plus/app/host-frame.js
+ * 在本项目自己的数组帧里发射，宿主的 L/R/M 三行语义与既有配色一个字节都没动。
+ * 用"信息色"（蓝）而不是 L/R/M 的语义色，是为了让"这一格被谁指着"和
+ * "二分查找的左/右/中点"在视觉上不混为一谈。
+ * ------------------------------------------------------------------------- */
+.prototype-marker.is-free { --marker-text: #0b5cad; --marker-bg: #e7f1fd; }
+.prototype-marker.is-free text { font-size: 10px; }

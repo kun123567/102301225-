@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "tree-sitter 的 ESM 发行包（base 的可选 D4 AST provider）；单独声明 type=module，避免被 drivenengine/base 的 commonjs 影响。"
+}

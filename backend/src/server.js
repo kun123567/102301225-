@@ -12,25 +12,31 @@ import { handleCreateRun, handleCreateSortRun, handleCreateBubbleRun, handleCrea
 import { handleGetExercises, handleCheckExercise } from './routes/exercises.js';
 import { getUsage } from './agent/rate-limit.js';
 import { knowledgeResponse } from './knowledge/retrieve.js';
-import { acceptsLocalCode, CodeRunError, runCustomCode } from './custom-code/runner.js';
+import { acceptsLocalCode, CodeRunError, runCustomCode, runCustomCodeWithEngine } from './custom-code/runner.js';
+import { handleDetect, handleDetectHealth, handleDetectTrace } from './routes/detect.js';
 import { createRun } from './runs/store.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(here, '../../frontend');
 const bstReplayPath = '/shared/algorithms/final/g/bst-replay.js';
-const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.svg': 'image/svg+xml' };
+/* 合并（PR #66 §1）：主分支的 bstReplayPath 保留；自定义代码示例库要的静态素材类型也保留 */
+/* .c/.cpp/.h/.txt/.md 是"自定义代码示例库"用的静态素材（frontend/samples/，原样保留网上样例） */
+const mime = {
+  '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json',
+  '.svg': 'image/svg+xml', '.c': 'text/plain', '.h': 'text/plain', '.cpp': 'text/plain', '.txt': 'text/plain', '.md': 'text/markdown',
+};
 
 function json(response, code, value) {
   response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(value));
 }
 
-async function readBody(request) {
+async function readBody(request, maxBytes = 10240) {
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 10240) throw new Error('BODY_TOO_LARGE');
+    if (size > maxBytes) throw new Error('BODY_TOO_LARGE');
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf8');
@@ -71,14 +77,31 @@ const server = createServer(async (request, response) => {
         return handleCreateSortRun(response, await readBody(request), algorithm);
       }
     }
+    // 2b. 自动识别（base 识别器 + 本仓库 third_party 的 Open Watcom）：只在本机工作台可用
+    if (pathname === '/api/detect/health' && method === 'GET') {
+      return handleDetectHealth(request, response, json);
+    }
+    if (pathname === '/api/detect' && method === 'POST') {
+      /* 自定义代码可能带注释/空白，比 10KB 的默认上限更宽；识别器自己还有 20000 字符上限 */
+      return handleDetect(request, response, await readBody(request, 262144), json);
+    }
+    if (pathname === '/api/detect/trace' && method === 'POST') {
+      return await handleDetectTrace(request, response, await readBody(request, 262144), json);
+    }
+
     if (pathname === '/api/algorithms/custom-array/runs' && method === 'POST') {
       if (!acceptsLocalCode(request)) return json(response, 403, { error: { code: 'LOCAL_ONLY', message: '请从本机工作台打开自定义代码。' } });
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') return json(response, 400, { error: { code: 'INVALID_INPUT', message: '请求必须是 JSON。' } });
       const body = await readBody(request);
       let input;
-      try { input = JSON.parse(body); } catch { return json(response, 400, { error: { code: 'INVALID_INPUT', message: '请求体不是合法 JSON。' } }); }
-      try { return json(response, 200, createRun(await runCustomCode(input))); }
-      catch (error) {
+      try { input = JSON.parse(body); } catch {
+        return json(response, 400, { error: { code: 'INVALID_INPUT', message: '请求体不是合法 JSON。' } });
+      }
+      try {
+        /* mode:'engine' → 真编译 + 插桩（detect-engine）；缺省仍是极简子集翻译器（老行为不变） */
+        const produce = input && input.mode === 'engine' ? runCustomCodeWithEngine : runCustomCode;
+        return json(response, 200, createRun(await produce(input)));
+      } catch (error) {
         if (!(error instanceof CodeRunError)) throw error;
         return json(response, error.status, { error: { code: error.code, message: error.message } });
       }
@@ -145,7 +168,9 @@ const server = createServer(async (request, response) => {
     if (!type) return json(response, 404, { error: { code: 'NOT_FOUND', message: '文件不存在。' } });
     try {
       const body = await readFile(file);
-      response.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
+      /* 静态资源一律 no-cache：改名/改内容后必须能立刻拿到新版本
+         （否则前端 app.js 走缓存，用户看到的是旧逻辑 —— 例如整程序被当成函数体跑）。 */
+      response.writeHead(200, { 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-cache, must-revalidate' });
       response.end(method === 'HEAD' ? undefined : body);
     } catch (error) {
       if (['ENOENT', 'EISDIR', 'ENOTDIR'].includes(error.code)) return json(response, 404, { error: { code: 'NOT_FOUND', message: '文件不存在。' } });

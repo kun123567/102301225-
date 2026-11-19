@@ -1,0 +1,12 @@
+{
+  "name": "plus01-02",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "统一渲染端：add02 的窗口壳 + add01 的 9 个渲染器 / 9 种图层契约 / 目录换算播放 / 全部 54 个内置案例",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node serve.mjs",
+    "smoke": "node tools/smoke.mjs"
+  }
+}

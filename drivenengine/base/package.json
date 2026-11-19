@@ -1,0 +1,6 @@
+{
+  "name": "drivenengine-base",
+  "private": true,
+  "description": "prototype01 / AnyviewC 风格 C 语言可视化环境的源码（base 引擎）。本仓库是 ESM 项目，这里的 .js 是 CommonJS，必须用 type=commonjs 声明，否则 require 不可用。",
+  "type": "commonjs"
+}

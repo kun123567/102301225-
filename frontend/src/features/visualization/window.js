@@ -17,6 +17,7 @@ import { createExplanationPanel } from './explanation-panel.js';
 import { describeGraphStep } from './graph-explanation.js';
 import { buildGraphPreview } from './bfs-preview.js';
 import { buildPrototypeArrayFrame } from './prototype-array.js';
+import { createPlusView, plusCase, isPlus } from './ext/plus-bridge.js';
 
 const SORT_ALGORITHMS = ['bubble-sort', 'insertion-sort', 'binary-insertion-sort', 'shell-sort', 'selection-sort', 'quick-sort', 'heap-sort', 'merge-sort'];
 
@@ -92,7 +93,22 @@ export function createVizWindow(host, {
   const levelOrder = algorithm === 'binary-tree-level-order';
   const scrollableTreeTable = g && !levelOrder;
   const unionFind = algorithm === 'union-find';
+  /* 合并（PR #66 §1）：主分支把"排序"扩成 8 种，我们的 plus 示例也要用同一套窗口 */
   const sorting = SORT_ALGORITHMS.includes(algorithm);
+  const plusId = isPlus(algorithm) ? algorithm : null;
+
+  /** 自定义代码的标题与图例：按本次 run 的真实形态（数组 / 结构）说人话 */
+  function applyCustomChrome(current) {
+    const structured = Boolean(current && current.structure === 'structure');
+    root.querySelector('.win-sub').textContent = structured ? '自定义代码 · 结构视图' : '自定义代码 · 数组视图';
+    root.querySelector('.vh-sub').textContent = '按实际执行记录播放';
+    const legend = root.querySelector('.viewport-legend');
+    legend.hidden = false;
+    legend.setAttribute('aria-label', structured ? '结构图例' : '数组写入图例');
+    legend.innerHTML = structured
+      ? '<span><b class="legend-right">橙</b> 药丸＝指针变量现在指哪个结点</span>'
+      : '<span><b class="legend-mid">蓝</b> 药丸＝本行游标（i / j …）</span><span><b class="legend-right">橙</b> 本步写入的格子</span>';
+  }
   const custom = algorithm === 'custom-array';
   const graph = graphAlgorithm(algorithm);
   const search = arraySearch(algorithm);
@@ -156,11 +172,17 @@ export function createVizWindow(host, {
   }
   
   if (custom) {
-    root.querySelector('.win-sub').textContent = '自定义代码 · 数组视图';
-    root.querySelector('.vh-sub').textContent = '按实际执行记录播放';
-    const legend = root.querySelector('.viewport-legend');
-    legend.setAttribute('aria-label', '数组写入图例');
-    legend.innerHTML = '<span><b class="legend-right">橙</b> 本步写入位置</span>';
+    /* 自定义代码可能是数组，也可能是链表/树/图/矩阵（run.structure 由后端折叠结果决定）。
+       窗口是页面初始化时建的（那时还没有 run），所以先按"数组"占位，
+       run 到了再由 bindRun 里的 applyCustomChrome 按真实形态重挂。 */
+    applyCustomChrome(run);
+  }
+  // plus01&02 示例：标题别再显示"二分查找 · 数组视图"（B 树/图/栈那些根本不是数组）
+  if (isPlus(algorithm)) {
+    const plusItem = plusCase(algorithm);
+    root.querySelector('.win-sub').textContent = (plusItem ? plusItem.pkgName : '示例库') + ' · ' + (plusItem ? plusItem.title : '示例');
+    root.querySelector('.vh-title').textContent = '示例视图';
+    root.querySelector('.vh-sub').textContent = plusItem ? plusItem.title : '';
   }
   host.append(root);
 
@@ -208,7 +230,18 @@ export function createVizWindow(host, {
   }
 
   function fitView() {
+    /* 合并（PR #66 §1）：主分支的可滚动树表不取景；plus 结构族卡片也不取景（各管各的 return） */
     if (scrollableTreeTable) return;
+    /* plus01&02 的**结构族**示例是"文档流卡片"（每层一张卡），本来就按容器宽度排好版，
+       不能被视口的自动取景缩放：否则上一轮的 scale 会被继承/反复相乘，
+       卡越走越小、最后看不见。这里对结构族 plus 运行只把视图复位成 1:1。
+       数组族 plus 仍然走本项目的数组链路，照旧自动取景。 */
+    if (currentRun && currentRun.plus && currentRun.structure !== 'array') {
+      view.scale = 1; view.x = 0; view.y = 0;
+      applyView();
+      warnIfCanvasTiny();
+      return;
+    }
     const cw = body.clientWidth || 1;
     const ch = body.clientHeight || 1;
     const sw = scene.offsetWidth || 1;
@@ -402,6 +435,9 @@ export function createVizWindow(host, {
   function bindRun(nextRun) {
     currentRun = nextRun;
     if (!nextRun) return;
+    /* 自定义代码的标题/图例要等 run 到了才知道是"数组"还是"结构"（窗口是页面初始化时建的，
+       那时还没有 run）。按 run.structure 重挂一次，避免"跑 Trie 却写着数组视图"。 */
+    if (custom) applyCustomChrome(nextRun);
     if (viz) viz.destroy();
     scene.replaceChildren();
     if (g) {
@@ -424,6 +460,10 @@ export function createVizWindow(host, {
       scene.append(graphPreview.element);
       graphExplanation = createExplanationPanel();
       explainHost.replaceChildren(graphExplanation.explain);
+    } else if (nextRun.plus) {
+      // plus01&02 demo library: arrays keep this project's array visualization (only frameBuilder swapped);
+      // other families use the new prototype (vendor/plus + plus-viz.css). Existing styles/animations untouched.
+      viz = createPlusView(vizHost, nextRun, { explainContainer: explainHost });
     } else viz = createVisualization(vizHost, {
       run: nextRun,
       explainContainer: explainHost,

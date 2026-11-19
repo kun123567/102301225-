@@ -2,6 +2,7 @@ import { gAlgorithm } from './g-algorithms.js';
 import { dataAlgorithm as cAlgorithm } from './data-algorithms.js';
 import { arraySearch } from './array-search.js';
 import { graphAlgorithm } from './graph-algorithms.js';
+import { isPlus, plusCase } from '../visualization/ext/plus-bridge.js';
 
 export function createWorkbenchUI({ onNavigate = () => {} } = {}) {
   const $ = id => document.getElementById(id);
@@ -106,7 +107,13 @@ export function createWorkbenchUI({ onNavigate = () => {} } = {}) {
       query.set('unit', unit);
       if (section && /^[a-z0-9-]{1,50}$/.test(section)) query.set('section', section);
     }
-    if (name === 'workbench' && (['insertion-sort', 'binary-insertion-sort', 'shell-sort', 'selection-sort', 'quick-sort', 'heap-sort', 'merge-sort', 'binary-search', 'bubble-sort', 'custom-array', 'union-find'].includes(requestedAlgorithm) || gAlgorithm(requestedAlgorithm) || graphAlgorithm(requestedAlgorithm) || arraySearch(requestedAlgorithm) || cAlgorithm(requestedAlgorithm))) {
+    /* 合并（PR #66 §1）：主分支的 8 种排序 + G/C/并查集白名单，加上我们的 plus 示例白名单 */
+    /* plus 示例也要能写进地址（评审报告 §3.11）：以前白名单里没有 isPlus，
+       选完示例后 hash 不带 plus 参数，复制地址/刷新/前进后退就回到默认算法。
+       按目录校验 id（plusCase），避免接受任意脏值。 */
+    const plusId = isPlus(requestedAlgorithm) ? String(requestedAlgorithm).slice('plus:'.length) : null;
+    const knownPlus = Boolean(plusId && plusCase(plusId));
+    if (name === 'workbench' && (['insertion-sort', 'binary-insertion-sort', 'shell-sort', 'selection-sort', 'quick-sort', 'heap-sort', 'merge-sort', 'binary-search', 'bubble-sort', 'custom-array', 'union-find'].includes(requestedAlgorithm) || gAlgorithm(requestedAlgorithm) || graphAlgorithm(requestedAlgorithm) || arraySearch(requestedAlgorithm) || cAlgorithm(requestedAlgorithm) || knownPlus)) {
       query.set('algorithm', requestedAlgorithm);
     }
     const hash = '#' + name + (query.size ? '?' + query : '');
@@ -213,8 +220,10 @@ export function createWorkbenchUI({ onNavigate = () => {} } = {}) {
     navigate,
     setAlgorithm(value) {
       algorithm = value;
+      /* 合并（PR #66 §1）：主分支把 G/C/并查集也算"无练习"；我们另加 plus 预览不接问答 */
       panel.querySelector('.tutor-practice').hidden = Boolean(graphAlgorithm(value) || arraySearch(value) || cAlgorithm(value) || value === 'union-find' || gAlgorithm(value));
-      const tutorUnavailable = value === 'custom-array';
+      /* plus 示例是本地预览：后端没有这次运行的记录，步骤问答必然 404（评审报告 §3.10）→ 直接关掉入口 */
+      const tutorUnavailable = value === 'custom-array' || isPlus(value);
       if (tutorUnavailable && open) show(false, false);
       ball.hidden = currentPage !== 'workbench' || tutorUnavailable;
     },
