@@ -252,3 +252,17 @@ test('§3b memcpy 部分复制：按实际覆盖的元素数标记，其余保�
   const l3 = t3.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
   assert.deepEqual(l3.data.labels, ['1', '2', '?', '?'], 'k * sizeof(T)：只标前 k 格：' + JSON.stringify(l3.data.labels));
 });
+test('§3b 回退后的标签（逐步状态）：写之前是 ?，写之后才是已知值', { skip }, async () => {
+  /* 报告 §3 验收里点名要核对"回退后的标签"：标签必须按**这一步**的事实生成，
+     回退到 scanf/memcpy 之前的那一步时应当还是 ?。 */
+  const code = ['#include <stdio.h>', 'int main(void)', '{', '  int a[2];', '  int read;', '  read = scanf("%d %d", &a[0], &a[1]);', '  printf("%d %d\\n", read, a[0]);', '  return 0;', '}'].join('\n');
+  const trace = await runC(code, { stdin: '7 x' });
+  const layersOf = (step) => step.layers.find((l) => l.id === 'arr:a');
+  const scanfLine = trace.layerRun.steps.findIndex((s) => s.lineId === '6');
+  assert.ok(scanfLine >= 0, 'scanf 那一步必须存在：' + trace.layerRun.steps.map((s) => s.lineId).join(','));
+  /* 第一步可能就是 scanf 行（`int read;` 是声明、不产步）：有前置步才检查"写之前还是 ?" */
+  const before = scanfLine > 0 ? layersOf(trace.layerRun.steps[scanfLine - 1]) : null;
+  if (before) assert.deepEqual(before.data.labels, ['?', '?'], 'scanf 之前的步骤应还是 ?：' + JSON.stringify(before.data.labels));
+  const after = layersOf(trace.layerRun.steps.at(-1));
+  assert.deepEqual(after.data.labels, ['7', '?'], 'scanf 之后：首格已知、次格仍 ?');
+});
