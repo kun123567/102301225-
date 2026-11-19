@@ -552,45 +552,45 @@ function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
   const after = [];
   const seen = new Set();
 
-  /* ---- scanf / fscanf：按成功项数标记 ---- */
+  /* ---- scanf / fscanf：按**整次调用的转换序号**标记（报告 §1） ---- */
   const scan = /\b(scanf|fscanf)\s*\(/.exec(s);
   if (scan) {
     const open = scan.index + scan[0].length - 1;
     const close = matchParen(s, open);
     if (close >= 0) {
-      const args = s.slice(open + 1, close);
-      /* 目标列表：`&a[i]` / `&g[i][j]`，下标要可证明无副作用 */
-      const oneD = [];
-      const twoD = [];
-      for (const ref of args.matchAll(/&\s*([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)/g)) {
-        const name = ref[1];
-        const idxTexts = [...ref[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
-        if (!idxTexts.length || idxTexts.length > 2) continue;
-        if (!idxTexts.every((t) => isPurityProvable(t, macroBodies))) continue;
-        if (idxTexts.length === 1) oneD.push({ name, at: `(int)(${idxTexts[0]})` });
-        else twoD.push({ name, r: `(int)(${idxTexts[0]})`, c: `(int)(${idxTexts[1]})` });
-      }
-      /* 返回值的来源：
-         · 裸 `scanf(...)` → 我们把整句包成 `int _avc_sc = (scanf(...));` 拿返回值（只求值一次）
-         · `read = scanf(...)` → 语句之后 `read` 就是返回值，直接用
-         · 其它（在 if 条件里等）→ 证明不了，不标（保持未知） */
-      const assigned = /^([A-Za-z_]\w*)\s*=\s*(?:scanf|fscanf)\s*\(/.exec(s);
-      const bare = /^(?:scanf|fscanf)\s*\(/.test(s);
-      let countExpr = null;
-      if (assigned) countExpr = assigned[1];
-      else if (bare) countExpr = '_avc_sc';
-      if (countExpr) {
-        /* 同一数组的多个目标必须放在**同一次** __avc_sw 调用里：它按顺序只标前 okCount 个 */
-        const groups = new Map();
-        for (const t of oneD.slice(0, 4)) {
-          if (!groups.has(t.name)) groups.set(t.name, []);
-          groups.get(t.name).push(t.at);
+      const args = splitTopLevel(s.slice(open + 1, close), ',');
+      /* fscanf 的第 1 个参数是 FILE*，格式串在第 2 个；scanf 在第 1 个 */
+      const fmtIndex = scan[1] === 'fscanf' ? 1 : 0;
+      const fmtText = String(args[fmtIndex] || '').trim();
+      const fmt = /^"((?:[^"\\]|\\.)*)"$/.exec(fmtText);
+      const conversions = fmt ? countScanfConversions(fmt[1]) : null;   // null = 格式串不是字面量，无法可靠识别
+      if (conversions != null) {
+        const targets = args.slice(fmtIndex + 1);
+        /* 有序目标表：每个"会计入返回值"的转换对应一个参数（标量也要占位，报告明确要求保留位置） */
+        let ord = 0;
+        for (let i = 0; i < conversions.length; i++) {
+          if (conversions[i] === 'suppressed') continue;                // %*d 不消耗参数、不计入返回值
+          ord += 1;
+          const arg = String(targets[i] || '').trim();
+          const ref = /^&\s*([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)$/.exec(arg);
+          if (!ref) continue;                                          // 标量目标：占位但不发标记
+          const name = ref[1];
+          const idxTexts = [...ref[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
+          if (!idxTexts.length || idxTexts.length > 2) continue;
+          if (!idxTexts.every((t) => isPurityProvable(t, macroBodies))) continue;
+          /* 参数顺序必须与运行时签名一致：__avc_swo(okCount, ord, name, idx) */
+          if (idxTexts.length === 1) after.push(`__avc_swo(COUNT,${ord},"${name}",(int)(${idxTexts[0]}));`);
+          else after.push(`__avc_swo2(COUNT,${ord},"${name}",(int)(${idxTexts[0]}),(int)(${idxTexts[1]}));`);
         }
-        for (const [name, ats] of groups) {
-          const slots = [...ats, '-1', '-1', '-1'].slice(0, 4);
-          after.push(`__avc_sw(${countExpr},"${name}",${slots.join(',')});`);
-        }
-        for (const t of twoD.slice(0, 2)) after.push(`__avc_sw2(${countExpr},"${t.name}",${t.r},${t.c},-1,-1);`);
+        /* 返回值的来源：
+           · 裸 `scanf(...)` → 整句包成 `int _avc_sc = (scanf(...));` 拿返回值（只求值一次）
+           · `read = scanf(...)` → 语句之后 read 就是返回值
+           · 其它（在 if 条件里等）→ 证明不了，不标（保持未知） */
+        const assigned = /^([A-Za-z_]\w*)\s*=\s*(?:scanf|fscanf)\s*\(/.exec(s);
+        const bare = /^(?:scanf|fscanf)\s*\(/.test(s);
+        const countExpr = assigned ? assigned[1] : (bare ? '_avc_sc' : null);
+        if (!countExpr) after.length = 0;
+        else for (let i = 0; i < after.length; i++) after[i] = after[i].replace('COUNT', countExpr);
       }
     }
   }
@@ -613,9 +613,15 @@ function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
     seen.add(key);
     if (count >= dims[0] && dims.length === 1) { after.push(`__avc_init(${lineNo},"${name}",${dims[0]});`); continue; }
     if (dims.length === 2) {
-      const rows = Math.max(0, Math.min(dims[0], Math.ceil(count / (dims[1] || 1))));
-      if (rows >= dims[0]) after.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`);
-      else for (let r = 0; r < rows; r++) for (let c = 0; c < dims[1]; c++) after.push(`__avc_w2(${lineNo},"${name}",${r},${c});`);
+      /* 二维：按**线性元素下标**逐格映射成行列（报告 §2）。
+         以前把"覆盖元素数"向上取整成行数、再把整行都标成已写，
+         于是 `memcpy(g, b, sizeof(int))` 会把第一行两格都标已知。 */
+      const cols = dims[1] || 1;
+      const total = dims[0] * cols;
+      if (count >= total) { after.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`); continue; }
+      for (let i = 0; i < Math.min(count, total); i++) {
+        after.push(`__avc_w2(${lineNo},"${name}",${Math.floor(i / cols)},${i % cols});`);
+      }
       continue;
     }
     for (let i = 0; i < Math.min(count, dims[0]); i++) after.push(`__avc_w(${lineNo},"${name}",${i});`);
@@ -639,6 +645,28 @@ function copyElementCount(sizeText, name, dims) {
   const kTimes = /^(\d+)\s*\*\s*sizeof\s*\(?/.exec(t) || /^sizeof\s*\(?[^)]*\)?\s*\*\s*(\d+)$/.exec(t);
   if (kTimes) return Number(kTimes[1]);
   return null;
+}
+
+/**
+ * 数一次 scanf 里的转换项（按顺序）：返回数组，每项是 'normal' 或 'suppressed'（`%*d`）。
+ * 返回 null 表示格式串无法可靠解析（非字面量 / 含 `%%` 以外无法识别的东西也不必怕，`%%` 直接跳过）。
+ * 只有"会计入返回值"的转换才消耗参数并对齐序号（报告 §1：标量目标也要占位）。
+ */
+function countScanfConversions(format) {
+  const out = [];
+  const text = String(format || '');
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '%') continue;
+    i += 1;
+    if (text[i] === '%') continue;                 // %% 字面量，不消耗参数
+    let suppressed = false;
+    if (text[i] === '*') { suppressed = true; i += 1; }
+    /* 跳过标志/宽度/长度修饰，直到拿到转换字符 */
+    while (i < text.length && /[-+ #0-9.hlLjzt]/.test(text[i])) i += 1;
+    if (i >= text.length) break;
+    out.push(suppressed ? 'suppressed' : 'normal');
+  }
+  return out;
 }
 
 function watchCalls(line, v) {

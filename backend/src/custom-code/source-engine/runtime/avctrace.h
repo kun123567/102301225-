@@ -297,20 +297,22 @@ static void __avc_sw(int okCount, const char* name, int c0, int c1, int c2, int 
     if (okCount >= 4 && c3 >= 0) __avc_w(0, name, c3);
 }
 
-/* 二维目标的同一套逻辑（最多 2 个 `&g[r][c]`） */
-static void __avc_sw2(int okCount, const char* name, int r0, int c0, int r1, int c1)
+/* 按"转换序号"判定：scanf 的返回值是**整次调用**里成功赋值的转换项数，
+ * 所以每个目标都要带自己在整次调用里的序号（1 基），只有 okCount >= ord 才算写到了。
+ * 以前按数组分组、每组都拿整次调用的成功数，于是 `scanf("%d %d", &a[0], &b[0])` 输入 `7 x`
+ * 会把 b[0] 也标成已知（报告 §1）。 */
+static void __avc_swo(int okCount, int ord, const char* name, int idx)
 {
-    if (okCount <= 0) return;
-    if (r0 >= 0 && c0 >= 0) {
+    if (okCount <= 0 || ord <= 0 || okCount < ord || idx < 0) return;
+    __avc_w(0, name, idx);
+}
+static void __avc_swo2(int okCount, int ord, const char* name, int r, int c)
+{
+    if (okCount <= 0 || ord <= 0 || okCount < ord || r < 0 || c < 0) return;
+    {
         char b[300];
         __avc_open();
-        sprintf(b, "W|0|%s|%d|%d", name, r0, c0);
-        __avc_out(b);
-    }
-    if (okCount >= 2 && r1 >= 0 && c1 >= 0) {
-        char b[300];
-        __avc_open();
-        sprintf(b, "W|0|%s|%d|%d", name, r1, c1);
+        sprintf(b, "W|0|%s|%d|%d", name, r, c);
         __avc_out(b);
     }
 }

@@ -266,3 +266,79 @@ test('§3b 回退后的标签（逐步状态）：写之前是 ?，写之后才�
   const after = layersOf(trace.layerRun.steps.at(-1));
   assert.deepEqual(after.data.labels, ['7', '?'], 'scanf 之后：首格已知、次格仍 ?');
 });
+/* =====================================================================
+ * 第四轮复审（PR-66-动画引擎修改意见-88696c9.md）的复现：
+ *   §1 scanf 按**整次调用的转换序号**判定（跨数组不能都标成"第一个成功"）
+ *   §2 二维数组 memcpy 只标**完整覆盖**的线性元素
+ * ===================================================================== */
+
+test('§4-1 scanf 按转换序号判定：跨数组/标量占位/一维二维混合', { skip }, async () => {
+  const cases = [
+    {
+      name: '跨数组各取一个，第二项失败',
+      stdin: '7 x',
+      src: ['  int a[2];', '  int b[2];', '  int read;', '  read = scanf("%d %d", &a[0], &b[0]);', '  printf("%d %d\\n", read, a[0]);'],
+      want: { labels: { a: ['7', '?'], b: ['?', '?'] }, stdout: /^1\s/ },
+    },
+    {
+      name: '同一数组两项，第二项失败',
+      stdin: '7 x',
+      src: ['  int a[2];', '  int read;', '  read = scanf("%d %d", &a[0], &a[1]);', '  printf("%d %d\\n", read, a[0]);'],
+      want: { labels: { a: ['7', '?'] }, stdout: /^1\s/ },
+    },
+    {
+      name: '标量在前、数组在后（第 2 项失败）',
+      stdin: '7 x',
+      src: ['  int a[2];', '  int k = 0;', '  int read;', '  read = scanf("%d %d", &k, &a[0]);', '  printf("%d %d %d\\n", read, k, a[0]);'],
+      want: { labels: { a: ['?', '?'] }, stdout: /^1\s7\s/ },
+    },
+    {
+      name: '标量在前、数组在后（第 2 项成功）',
+      stdin: '7 9',
+      src: ['  int a[2];', '  int k = 0;', '  int read;', '  read = scanf("%d %d", &k, &a[0]);', '  printf("%d %d %d\\n", read, k, a[0]);'],
+      want: { labels: { a: ['9', '?'] }, stdout: /^2\s7\s/ },
+    },
+    {
+      name: '一维与二维混合（第二项失败）',
+      stdin: '7 x',
+      src: ['  int a[2];', '  int g[2][2];', '  int read;', '  read = scanf("%d %d", &a[0], &g[0][0]);', '  printf("%d %d\\n", read, a[0]);'],
+      want: { labels: { a: ['7', '?'] }, matrix: { g: [[7, '·'], ['·', '·']] }, stdout: /^1\s/ },
+    },
+  ];
+  for (const item of cases) {
+    const code = ['#include <stdio.h>', 'int main(void)', '{', ...item.src, '  return 0;', '}'].join('\n');
+    const trace = await runC(code, { stdin: item.stdin });
+    assert.equal(trace.ok, true, item.name + ' 运行失败');
+    assert.match(String(trace.stdout).replace(/\r/g, '').trim(), item.want.stdout, item.name + ' 的原程序输出不符');
+    const layers = trace.layerRun.steps.at(-1).layers;
+    for (const [key, want] of Object.entries(item.want.labels || {})) {
+      const layer = layers.find((l) => l.id === 'arr:' + key);
+      assert.ok(layer, item.name + '：缺少 ' + key + ' 层');
+      assert.deepEqual(layer.data.labels, want, item.name + ' → ' + key + ' 标签不符');
+    }
+  }
+});
+
+test('§4-2 二维数组 memcpy 只标完整覆盖的元素（一个/一行/跨行三个/整块）', { skip }, async () => {
+  const cases = [
+    { name: '复制一个元素', size: 'sizeof(int)', want: [[7, '·'], ['·', '·']], out: '7' },
+    { name: '复制一整行', size: '2 * sizeof(int)', want: [[7, 8], ['·', '·']], out: '8' },
+    { name: '跨行三个元素', size: '3 * sizeof(int)', want: [[7, 8], [9, '·']], out: '9' },
+    { name: '整块覆盖', size: 'sizeof(g)', want: [[7, 8], [9, 10]], out: '10' },
+  ];
+  for (const item of cases) {
+    const code = [
+      '#include <stdio.h>', '#include <string.h>', 'int main(void)', '{',
+      '  int g[2][2];', '  int b[2][2] = {{7, 8}, {9, 10}};',
+      `  memcpy(g, b, ${item.size});`,
+      `  printf("%d\\n", g${item.name === '跨行三个元素' ? '[1][0]' : item.name === '整块覆盖' ? '[1][1]' : item.name === '复制一整行' ? '[0][1]' : '[0][0]'});`,
+      '  return 0;', '}',
+    ].join('\n');
+    const trace = await runC(code);
+    assert.equal(trace.ok, true, item.name + ' 运行失败');
+    assert.equal(String(trace.stdout).replace(/\r/g, '').trim(), item.out, item.name + ' 原程序输出不符');
+    const mat = trace.layerRun.steps.at(-1).layers.find((l) => l.style === 2);
+    assert.ok(mat, item.name + '：缺少矩阵层');
+    assert.deepEqual(mat.data.values, item.want, item.name + ' 只应标记完整覆盖的格子：' + JSON.stringify(mat.data.values));
+  }
+});
