@@ -611,14 +611,14 @@ function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
     const key = name + '|copy';
     if (seen.has(key)) continue;
     seen.add(key);
-    if (count >= dims[0] && dims.length === 1) { before.push(`__avc_init(${lineNo},"${name}",${dims[0]});`); continue; }
+    if (count >= dims[0] && dims.length === 1) { after.push(`__avc_init(${lineNo},"${name}",${dims[0]});`); continue; }
     if (dims.length === 2) {
       const rows = Math.max(0, Math.min(dims[0], Math.ceil(count / (dims[1] || 1))));
-      if (rows >= dims[0]) before.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`);
-      else for (let r = 0; r < rows; r++) for (let c = 0; c < dims[1]; c++) before.push(`__avc_w2(${lineNo},"${name}",${r},${c});`);
+      if (rows >= dims[0]) after.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`);
+      else for (let r = 0; r < rows; r++) for (let c = 0; c < dims[1]; c++) after.push(`__avc_w2(${lineNo},"${name}",${r},${c});`);
       continue;
     }
-    for (let i = 0; i < Math.min(count, dims[0]); i++) before.push(`__avc_w(${lineNo},"${name}",${i});`);
+    for (let i = 0; i < Math.min(count, dims[0]); i++) after.push(`__avc_w(${lineNo},"${name}",${i});`);
   }
   return { before, after };
 }
