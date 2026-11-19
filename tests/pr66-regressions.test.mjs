@@ -176,3 +176,79 @@ test('§3.5 多个数组走多卡视图（不丢第二个数组），字符与�
   assert.ok(Array.isArray(last.labels) && last.labels.length, '字符标签必须随步传递：' + JSON.stringify(last.labels));
   assert.ok(last.labels.includes('h') || last.labels.includes('i'), '标签应是字符而不是 ASCII 数字：' + JSON.stringify(last.labels));
 });
+
+/* =====================================================================
+ * 第二轮复审（PR-66-动画引擎最新复审与修改建议.md）的复现：
+ *   §2 普通下标被当成有效长度
+ *   §3 scanf 部分成功 / memcpy 部分复制
+ * ===================================================================== */
+
+test('§2b 普通数组里的 `a[n] = 7`：末帧保留 [1,7,3,4]，写入位置可见', { skip }, async () => {
+  const code = ['#include <stdio.h>', 'int main(void)', '{', '  int a[4] = {1, 2, 3, 4};', '  int n = 1;', '  a[n] = 7;', '  printf("%d %d %d %d\\n", a[0], a[1], a[2], a[3]);', '  return 0;', '}'].join('\n');
+  const trace = await runC(code);
+  assert.equal(trace.ok, true);
+  assert.equal(String(trace.stdout).replace(/\r/g, '').trim(), '1 7 3 4');
+  const layer = trace.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(layer.data.values, [1, 7, 3, 4], '普通数组不能按 n 裁掉（报告 §2）：' + JSON.stringify(layer.data.values));
+  assert.deepEqual(layer.data.labels, ['1', '7', '3', '4']);
+});
+
+test('§2b 复测：不同长度数组 / 无关的 n / 真实顺序栈仍按 top 缩', { skip }, async () => {
+  /* 这三条上一轮已修，这里固定住"普通数组不裁 + 结构族才裁"的分界 */
+  const two = ['#include <stdio.h>', 'int main(void)', '{', '  int a[2] = {1, 2};', '  int b[4] = {10, 20, 30, 40};', '  printf("%d %d\\n", a[1], b[3]);', '  return 0;', '}'].join('\n');
+  const t1 = await runC(two);
+  const ls = t1.layerRun.steps.at(-1).layers;
+  assert.deepEqual(ls.find((l) => l.id === 'arr:a').data.values, [1, 2]);
+  assert.deepEqual(ls.find((l) => l.id === 'arr:b').data.values, [10, 20, 30, 40]);
+
+  const unrelated = ['#include <stdio.h>', 'int main(void)', '{', '  int n = 1;', '  int a[4] = {1, 2, 3, 4};', '  printf("%d %d\\n", n, a[3]);', '  return 0;', '}'].join('\n');
+  const t2 = await runC(unrelated);
+  assert.deepEqual(t2.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a').data.values, [1, 2, 3, 4]);
+
+  const stack = ['#include <stdio.h>', 'int main(void)', '{', '  int s[16];', '  int top = -1;', '  int i;', '  for (i = 1; i <= 4; i++) {', '      top = top + 1;', '      s[top] = i;', '  }', '  while (top >= 0) {', '      top = top - 1;', '  }', '  printf("%d\\n", top);', '  return 0;', '}'].join('\n');
+  const t3 = await runC(stack);
+  const sizes = t3.layerRun.steps.map((step) => {
+    const l = step.layers.find((x) => String(x.id).startsWith('stack:s'));
+    if (!l) return null;
+    return (l.data.cells || []).length;
+  }).filter((n) => n != null);
+  assert.ok(sizes.includes(4), '压栈阶段应看到 4 格：' + sizes.join(','));
+  assert.equal(sizes.at(-1), 0, '全部出栈后可见范围要缩到 0：' + sizes.join(','));
+});
+
+test('§3b scanf 部分成功：只标成功的项，其余保留 ?', { skip }, async () => {
+  const code = ['#include <stdio.h>', 'int main(void)', '{', '  int a[2];', '  int read;', '  read = scanf("%d %d", &a[0], &a[1]);', '  printf("%d %d\\n", read, a[0]);', '  return 0;', '}'].join('\n');
+  const partial = await runC(code, { stdin: '7 x' });
+  assert.equal(String(partial.stdout).replace(/\r/g, '').trim(), '1 7');
+  const lp = partial.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(lp.data.labels, ['7', '?'], '只成功一项：首格已知、次格保留 ?（报告 §3）：' + JSON.stringify(lp.data.labels));
+
+  const none = await runC(code, { stdin: 'x y' });
+  /* 一项都没成功时 a[0] 仍是未初始化内存（原程序自己就会打印垃圾值），
+     所以只校验"成功赋值数 = 0"和"两格都保留 ?"。 */
+  assert.match(String(none.stdout).replace(/\r/g, '').trim(), /^0\s/);
+  const ln = none.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(ln.data.labels, ['?', '?'], '一项都没成功：两格都应保留 ?：' + JSON.stringify(ln.data.labels));
+
+  const full = await runC(code, { stdin: '7 8' });
+  const lf = full.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(lf.data.labels, ['7', '8'], '两项都成功：都应是已知值');
+});
+
+test('§3b memcpy 部分复制：按实际覆盖的元素数标记，其余保留 ?', { skip }, async () => {
+  const one = ['#include <stdio.h>', '#include <string.h>', 'int main(void)', '{', '  int a[3];', '  int b[3] = {7, 8, 9};', '  memcpy(a, b, sizeof(int));', '  printf("%d\\n", a[0]);', '  return 0;', '}'].join('\n');
+  const t1 = await runC(one);
+  assert.equal(String(t1.stdout).replace(/\r/g, '').trim(), '7');
+  const l1 = t1.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(l1.data.labels, ['7', '?', '?'], '只复制一格：首格已知、其余保留 ?（报告 §3）：' + JSON.stringify(l1.data.labels));
+
+  const all = ['#include <stdio.h>', '#include <string.h>', 'int main(void)', '{', '  int a[3];', '  int b[3] = {7, 8, 9};', '  memcpy(a, b, sizeof(a));', '  printf("%d %d %d\\n", a[0], a[1], a[2]);', '  return 0;', '}'].join('\n');
+  const t2 = await runC(all);
+  const l2 = t2.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(l2.data.labels, ['7', '8', '9'], '整块复制：三格都是已知值');
+
+  const kTimes = ['#include <stdio.h>', '#include <string.h>', 'int main(void)', '{', '  int a[4];', '  int b[4] = {1, 2, 3, 4};', '  memcpy(a, b, 2 * sizeof(int));', '  printf("%d %d\\n", a[1], a[2]);', '  return 0;', '}'].join('\n');
+  const t3 = await runC(kTimes);
+  const l3 = t3.layerRun.steps.at(-1).layers.find((l) => l.id === 'arr:a');
+  assert.deepEqual(l3.data.labels, ['1', '2', '?', '?'], 'k * sizeof(T)：只标前 k 格：' + JSON.stringify(l3.data.labels));
+});

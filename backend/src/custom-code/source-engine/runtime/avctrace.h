@@ -285,6 +285,36 @@ static void __avc_initstr(int line, const char* name, int n)
     __avc_out(b);
 }
 
+/* scanf 返回后按"实际赋值成功的项数"标记前 okCount 个目标（最多 4 个 1D 目标）。
+ * 为什么必须看返回值：`scanf("%d %d", &a[0], &a[1])` 输入 `7 x` 时只成功了 1 项，
+ * a[1] 仍是未初始化内存 —— 以前两个格子都标成已知，屏幕上把垃圾当数据（报告 §3）。 */
+static void __avc_sw(int okCount, const char* name, int c0, int c1, int c2, int c3)
+{
+    if (okCount <= 0) return;
+    if (c0 >= 0) __avc_w(0, name, c0);
+    if (okCount >= 2 && c1 >= 0) __avc_w(0, name, c1);
+    if (okCount >= 3 && c2 >= 0) __avc_w(0, name, c2);
+    if (okCount >= 4 && c3 >= 0) __avc_w(0, name, c3);
+}
+
+/* 二维目标的同一套逻辑（最多 2 个 `&g[r][c]`） */
+static void __avc_sw2(int okCount, const char* name, int r0, int c0, int r1, int c1)
+{
+    if (okCount <= 0) return;
+    if (r0 >= 0 && c0 >= 0) {
+        char b[300];
+        __avc_open();
+        sprintf(b, "W|0|%s|%d|%d", name, r0, c0);
+        __avc_out(b);
+    }
+    if (okCount >= 2 && r1 >= 0 && c1 >= 0) {
+        char b[300];
+        __avc_open();
+        sprintf(b, "W|0|%s|%d|%d", name, r1, c1);
+        __avc_out(b);
+    }
+}
+
 /* 指针数组的元素（`HNode* bucket[7]`、`Edge* adj[6]`）：类型标记 'p'。 * 值是**地址**不是数据 —— 折成数值数组会把 15278504 这种地址当数据画出来，
  * 屏幕上就是一堆无意义的巨大数字。折叠层看到 'p' 就不建数值数组层。 */
 static void __avc_aip(int line, const char* name, int idx, unsigned long p)

@@ -492,14 +492,15 @@ function arrayLayersOf(model, statics, scalars) {
       const set = new Set([...(a || []), ...(b || [])]);
       return set.size ? set : null;
     })();
-    /* 长度线索（**只认能关联到这个数组的**）：
-       ① 被当作该数组下标的游标标量（`s[top]` → top、`q[rear]` → rear、`a[n-1]` → n）——
-          这是程序自己声明的"当前有效长度"，优先级最高（栈 pop 之后长度必须跟着缩）；
-       ② 没有游标线索时才退到"写过的最大下标 + 1 / 初始化长度"。 */
+    /* 长度线索（**只认能关联到这个数组的游标**，且只有结构族才按它缩放）：
+       · 顺序栈 / 队列 → 游标（top / front+rear）就是"当前有效长度"，必须跟它缩；
+       · **普通数组** → 下标只是下标（`a[n] = 7` 里的 n 不是长度！按它裁会把写入的格子也裁掉）。
+         普通数组按**声明范围内实际采样的长度**展示，未初始化/未写过的格子用 `?` 标出来，
+         不裁剪（报告 §2/§3：写 1 格的四格数组要能看到 `[7,?,…]`，而不是只剩 1 格）。 */
     const hinted = hintLengthFor(name, scalars, indexVars);
-    const writtenLen = Number.isInteger(entry.writtenMax) && entry.writtenMax >= 0 ? entry.writtenMax + 1 : -1;
-    const initLen = Number.isInteger(entry.initLen) ? entry.initLen : -1;
-    const hint = hinted >= 0 ? hinted : Math.max(writtenLen, initLen);
+    const view = viewOf(semanticOf(name), scalars, own);
+    const structural = view === 'stack' || view === 'queue';
+    const hint = structural && hinted >= 0 ? hinted : -1;
     let { values, trimmedFrom } = trimValues(entry.values, hint);
     if (entry.chars && entry.stringInit) {
       /* 只有**字符串字面量初始化**的字符数组才把尾部 '\0' 当"字符串结束"裁掉 ——
@@ -513,7 +514,6 @@ function arrayLayersOf(model, statics, scalars) {
       ? values.map(charLabel)
       : values.map((v, i) => (inited(i) ? String(v) : '?'));
     const shown = values.map((v, i) => (labels[i] === '?' ? 0 : v));
-    const view = viewOf(semanticOf(name), scalars, own);
     const semantic = semanticForView(view, semanticOf(name));
 
     /* 顺序栈 → 竖版栈视图（栈顶在上、带 top 指针）；画法一变，"从哪头进出"就不用解释了 */

@@ -452,9 +452,11 @@ int main(void)
   },
   {
     id: 'array-written-extent',
-    title: '数组 · 只写前几格（长度变量叫 cnt，不在名字表里）',
+    title: '数组 · 只写前几格（普通数组按声明范围展示，未写格标 ?）',
     lang: 'c',
-    expect: { stdout: '0 1 2 ', kinds: ['array'], minSteps: 4, maxCells: 8 },
+    /* 普通数组不再按"写过的最大下标"裁剪（评审报告 §2）：声明 64 → 采样 16 格全部列出，
+       写过的 3 格是真实值、其余标 ?；所以这里的上限是**采样上限 16**。 */
+    expect: { stdout: '0 1 2 ', kinds: ['array'], minSteps: 4, maxCells: 16 },
     code: `#include <stdio.h>
 int main(void)
 {

@@ -252,7 +252,7 @@ test('整程序接线：编译失败/折叠失败都要抛出可读错误，不�
 });
 
 /* ---------------- 5. 数组裁剪 / 长度标量 / 栈队列语义 ---------------- */
-test('数组裁剪：声明 32、实际用 12 时按最短数组裁掉未初始化尾巴', { skip: !compilerReady() && '本机没有 third_party 工具链' }, async () => {
+test('数组裁剪：普通数组按声明范围展示，未写过的格子标 ?（不裁掉、也不摆垃圾）', { skip: !compilerReady() && '本机没有 third_party 工具链' }, async () => {
   const code = [
     '#include <stdio.h>',
     'int trap(int height[], int n) {',
@@ -285,11 +285,15 @@ test('数组裁剪：声明 32、实际用 12 时按最短数组裁掉未初始�
   const rightMax = byName.get('rightMax');
   assert.ok(height && leftMax && rightMax, '三个数组层都应在：' + [...byName.keys()].join(','));
   assert.equal(height.data.values.length, 12);
-  assert.equal(leftMax.data.values.length, 12, 'leftMax 应裁到 12 格：' + JSON.stringify(leftMax.data.values));
-  assert.equal(rightMax.data.values.length, 12, 'rightMax 应裁到 12 格：' + JSON.stringify(rightMax.data.values));
-  assert.equal(leftMax.data.trimmedFrom, 16, '裁剪前长度要留痕');
-  assert.deepEqual(leftMax.data.values, [0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3]);
-  assert.deepEqual(rightMax.data.values, [3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 1]);
+  /* 普通数组不再按"写过的最大下标/最短数组"裁剪（评审报告 §2）：
+     声明 32 格 → 采样 16 格全部列出，写过的 12 格是真实值，剩下 4 格标 ?。 */
+  assert.equal(leftMax.data.values.length, 16, 'leftMax 应按采样长度展示：' + JSON.stringify(leftMax.data.values));
+  assert.equal(rightMax.data.values.length, 16);
+  assert.deepEqual(leftMax.data.values.slice(0, 12), [0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3]);
+  assert.deepEqual(rightMax.data.values.slice(0, 12), [3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 1]);
+  for (const layer of [leftMax, rightMax]) {
+    assert.deepEqual(layer.data.labels.slice(12), ['?', '?', '?', '?'], layer.title + ' 未写过的格子要标 ?：' + JSON.stringify(layer.data.labels));
+  }
   for (const layer of [height, leftMax, rightMax]) {
     assert.ok(layer.data.values.every((v) => Math.abs(v) < 1e6), layer.title + ' 里不该有未初始化栈垃圾');
   }
@@ -867,6 +871,7 @@ test('合法大整数照原样显示；没初始化过的格子才打码（不�
   const t2 = await traceProgram({ code: noInit, lang: 'c', maxSteps: 500, withLayers: true });
   assert.equal(t2.ok, true);
   const b2 = t2.layerRun.steps.at(-1).layers.find((l) => String(l.id).startsWith('arr:b'));
-  assert.deepEqual(b2.data.values, [7, 8], '只写了两格就只画两格：' + JSON.stringify(b2.data.values));
+  assert.deepEqual(b2.data.values, [7, 8, 0, 0, 0, 0], '普通数组按声明范围展示（写过的两格是真值）：' + JSON.stringify(b2.data.values));
+  assert.deepEqual(b2.data.labels, ['7', '8', '?', '?', '?', '?'], '未写过的格子必须标 ?：' + JSON.stringify(b2.data.labels));
   for (const v of b2.data.values) assert.ok(Math.abs(Number(v)) < 1e6, '不该出现未初始化垃圾：' + v);
 });

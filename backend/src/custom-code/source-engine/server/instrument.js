@@ -536,42 +536,66 @@ function writeMarkCalls(lineNo, text, structArrayFields, defines) {
 }
 
 /**
- * 库函数写入：`scanf("%d", &a[i])`、`memcpy(a, b, sizeof(a))`、`memset(a, 0, sizeof(a))`。
+ * 库函数写入：`scanf`、`memcpy/memmove/memset`。
  *
- * 为什么必须覆盖：这些写入不经过赋值语句，`W` 标记抓不到；"首次观测"又不算写入，
- * 于是 `int a[2]; scanf("%d %d", &a[0], &a[1]);` 的格子会一直停在"未知"（实测显示 `? ?`）。
- *
- * 保守边界：
- *   · `scanf` 只认 `&数组[表达式]` 形式的参数（下标同样要可证明无副作用）；
- *   · `memcpy/memmove/memset` 只有**尺寸表达式里带 sizeof 且指向该数组**时才算"整块已写入"，
- *     部分长度（`memset(a, 0, k * sizeof(int))`）保持未知 —— 证明不了就不能当已初始化。
- * @returns {string[]}
+ * 为什么必须覆盖：这些写入不经过赋值语句，`W` 标记抓不到；"首次观测"又不算写入。
+ * 但**标多标少**都必须按真实结果来（报告 §3）：
+ *   · `scanf` 用返回值决定"前几项成功"：`scanf("%d %d", &a[0], &a[1])` 输入 `7 x` 只成功 1 项，
+ *     a[1] 仍是未初始化内存 —— 不能两个格子都标已知；全部失败就一个都不标。
+ *   · `memcpy/memset` 按**实际覆盖的完整元素数**标：`sizeof(int)` 是 1 个元素、
+ *     `sizeof(a)` 是整块、`k * sizeof(T)` 是 k 个；算不出来（变量长度）就一个都不标，保持未知。
+ * @returns {{before: string[], after: string[]}} before 插在语句前，after 插在语句后
  */
 function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
   const s = String(text || '');
-  const out = [];
-  const marks = new Set();
+  const before = [];
+  const after = [];
+  const seen = new Set();
 
-  /* scanf / fscanf：&a[i] / &g[i][j] */
-  for (const call of s.matchAll(/\b(?:scanf|fscanf)\s*\(/g)) {
-    const open = call.index + call[0].length - 1;
+  /* ---- scanf / fscanf：按成功项数标记 ---- */
+  const scan = /\b(scanf|fscanf)\s*\(/.exec(s);
+  if (scan) {
+    const open = scan.index + scan[0].length - 1;
     const close = matchParen(s, open);
-    if (close < 0) continue;
-    const args = s.slice(open + 1, close);
-    for (const ref of args.matchAll(/&\s*([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)/g)) {
-      const name = ref[1];
-      const idxTexts = [...ref[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
-      if (!idxTexts.length || idxTexts.length > 2) continue;
-      if (!idxTexts.every((t) => isPurityProvable(t, macroBodies))) continue;
-      const key = name + '|' + idxTexts.join(',');
-      if (marks.has(key)) continue;
-      marks.add(key);
-      if (idxTexts.length === 1) out.push(`__avc_w(${lineNo},"${name}",(int)(${idxTexts[0]}));`);
-      else out.push(`__avc_w2(${lineNo},"${name}",(int)(${idxTexts[0]}),(int)(${idxTexts[1]}));`);
+    if (close >= 0) {
+      const args = s.slice(open + 1, close);
+      /* 目标列表：`&a[i]` / `&g[i][j]`，下标要可证明无副作用 */
+      const oneD = [];
+      const twoD = [];
+      for (const ref of args.matchAll(/&\s*([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)/g)) {
+        const name = ref[1];
+        const idxTexts = [...ref[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1].trim());
+        if (!idxTexts.length || idxTexts.length > 2) continue;
+        if (!idxTexts.every((t) => isPurityProvable(t, macroBodies))) continue;
+        if (idxTexts.length === 1) oneD.push({ name, at: `(int)(${idxTexts[0]})` });
+        else twoD.push({ name, r: `(int)(${idxTexts[0]})`, c: `(int)(${idxTexts[1]})` });
+      }
+      /* 返回值的来源：
+         · 裸 `scanf(...)` → 我们把整句包成 `int _avc_sc = (scanf(...));` 拿返回值（只求值一次）
+         · `read = scanf(...)` → 语句之后 `read` 就是返回值，直接用
+         · 其它（在 if 条件里等）→ 证明不了，不标（保持未知） */
+      const assigned = /^([A-Za-z_]\w*)\s*=\s*(?:scanf|fscanf)\s*\(/.exec(s);
+      const bare = /^(?:scanf|fscanf)\s*\(/.test(s);
+      let countExpr = null;
+      if (assigned) countExpr = assigned[1];
+      else if (bare) countExpr = '_avc_sc';
+      if (countExpr) {
+        /* 同一数组的多个目标必须放在**同一次** __avc_sw 调用里：它按顺序只标前 okCount 个 */
+        const groups = new Map();
+        for (const t of oneD.slice(0, 4)) {
+          if (!groups.has(t.name)) groups.set(t.name, []);
+          groups.get(t.name).push(t.at);
+        }
+        for (const [name, ats] of groups) {
+          const slots = [...ats, '-1', '-1', '-1'].slice(0, 4);
+          after.push(`__avc_sw(${countExpr},"${name}",${slots.join(',')});`);
+        }
+        for (const t of twoD.slice(0, 2)) after.push(`__avc_sw2(${countExpr},"${t.name}",${t.r},${t.c},-1,-1);`);
+      }
     }
   }
 
-  /* memcpy / memmove / memset：整块初始化（只在 sizeof 覆盖整个数组时） */
+  /* ---- memcpy / memmove / memset：按覆盖的完整元素数标记 ---- */
   for (const call of s.matchAll(/\b(memcpy|memmove|memset)\s*\(\s*&?\s*([A-Za-z_]\w*)\s*[,)]/g)) {
     const name = call[2];
     const dims = dimsOf && dimsOf.get(name);
@@ -579,16 +603,42 @@ function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
     const open = s.indexOf('(', call.index);
     const close = open >= 0 ? matchParen(s, open) : -1;
     if (close < 0) continue;
-    const args = s.slice(open + 1, close);
-    /* 尺寸参数里要有 sizeof 且提到这个数组（`sizeof(a)` / `sizeof a`） */
-    if (!new RegExp('sizeof\\s*\\(?\\s*' + name + '\\b').test(args)) continue;
-    const key = name + '|all';
-    if (marks.has(key)) continue;
-    marks.add(key);
-    if (dims.length === 1) out.push(`__avc_init(${lineNo},"${name}",${dims[0]});`);
-    else out.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`);
+    const args = s.slice(open + 1, close).split(',');
+    /* memset 的尺寸是第 3 个参数，memcpy/memmove 是第 3 个（dest,src,n） */
+    const sizeText = (args[2] || '').trim();
+    const count = copyElementCount(sizeText, name, dims);
+    if (count == null) continue;                       // 算不出来 → 一格都不标，保持未知
+    const key = name + '|copy';
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (count >= dims[0] && dims.length === 1) { before.push(`__avc_init(${lineNo},"${name}",${dims[0]});`); continue; }
+    if (dims.length === 2) {
+      const rows = Math.max(0, Math.min(dims[0], Math.ceil(count / (dims[1] || 1))));
+      if (rows >= dims[0]) before.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`);
+      else for (let r = 0; r < rows; r++) for (let c = 0; c < dims[1]; c++) before.push(`__avc_w2(${lineNo},"${name}",${r},${c});`);
+      continue;
+    }
+    for (let i = 0; i < Math.min(count, dims[0]); i++) before.push(`__avc_w(${lineNo},"${name}",${i});`);
   }
-  return out;
+  return { before, after };
+}
+
+/**
+ * `sizeof(a)` / `sizeof(int)` / `k * sizeof(T)` / `sizeof(T) * k` → 覆盖了几个完整元素。
+ * 算不出来（含变量长度、或 size 不是 sizeof 形式）返回 null。
+ */
+function copyElementCount(sizeText, name, dims) {
+  const t = String(sizeText || '').trim();
+  if (!t) return null;
+  if (new RegExp('^sizeof\\s*\\(?\\s*' + name + '\\b').test(t)) {
+    /* 整块：1D 就是采样长度，2D 是 rows*cols */
+    return dims.length >= 2 ? dims[0] * dims[1] : dims[0];
+  }
+  const single = /^sizeof\s*\(\s*[A-Za-z_][\w\s*]*\s*\)$/.test(t) || /^sizeof\s+[A-Za-z_]\w*$/.test(t);
+  if (single) return 1;                                  // sizeof(int) → 一个元素
+  const kTimes = /^(\d+)\s*\*\s*sizeof\s*\(?/.exec(t) || /^sizeof\s*\(?[^)]*\)?\s*\*\s*(\d+)$/.exec(t);
+  if (kTimes) return Number(kTimes[1]);
+  return null;
 }
 
 function watchCalls(line, v) {
@@ -1271,11 +1321,17 @@ function instrument(source, opt) {
     const isControl = /^(if|for|while|switch)\b/.test(trimmed);
     /* 数组写入标记（`a[i] = …` / `a[i]++` / `g[i][j] = …`）：插在语句**前面**，
        这样下标表达式还是"写入前"的值（`a[j] = a[j+1]` 的 j 不会被语句改掉）。
-       折叠层靠它区分"写过的格子"和"从没初始化过的格子"，不再拿数值大小猜垃圾。 */
+       折叠层靠它区分"写过的格子"和"从没初始化过的格子"，不再拿数值大小猜垃圾。
+       库函数（scanf/memcpy/memset）可能还有"语句之后才知道"的标记（scanf 的成功项数）。 */
+    const libMarks = libWriteCalls(lineNo, trimmed, arrayDimsOf, macroBodies);
     const writeMark = [
       ...writeMarkCalls(lineNo, trimmed, structArrayFields, macroBodies),
-      ...libWriteCalls(lineNo, trimmed, arrayDimsOf, macroBodies),
+      ...libMarks.before,
     ];
+    const afterMark = libMarks.after;
+    /* 裸 `scanf(...)`：把整句包成 `int _avc_sc = (scanf(...));` 才能拿到"成功赋值项数"。
+       只求值一次、求值顺序不变（就是一个赋值表达式的初始化）。 */
+    const bareScan = afterMark.length && /^(?:scanf|fscanf)\s*\(/.test(trimmed);
 
     if (declLike) {
       // 声明行完全不插桩：一旦在声明后追加语句，后面的声明就不再处于块首（C89 违规），
@@ -1291,7 +1347,9 @@ function instrument(source, opt) {
       out.push(`{ __avc_t(${lineNo}); __avc_x(); ${codeLine} }`);
     } else {
       const mark = writeMark.length ? ' ' + writeMark.join(' ') : '';
-      out.push(`{ __avc_t(${lineNo});${mark} ${codeLine}${wtail} }`);
+      const tail = afterMark.length ? ' ' + afterMark.join(' ') : '';
+      const body = bareScan ? `int _avc_sc = (${trimmed.replace(/;\s*$/, '')});` : codeLine;
+      out.push(`{ __avc_t(${lineNo});${mark} ${body}${wtail}${tail} }`);
     }
     steps.push(lineNo);
   }
