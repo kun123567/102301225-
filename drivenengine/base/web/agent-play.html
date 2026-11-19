@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>算法动画回放 · B 包（图算法与并查集）</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.55 system-ui, "Microsoft YaHei", sans-serif; background:#f5f6f8; color:#222; }
+  header { padding:9px 14px; background:#fff; border-bottom:1px solid #dde1e6; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0 10px 0 0; font-weight:600; white-space:nowrap; }
+  select, button { font:12px inherit; padding:3px 8px; }
+  button { cursor:pointer; }
+  #meta { margin-left:auto; color:#6b7684; font:11px/1.4 ui-monospace, Consolas, monospace; }
+  main { display:grid; grid-template-columns: 340px minmax(420px,1fr) 260px; gap:10px; padding:10px; align-items:start; }
+  .card { background:#fff; border:1px solid #dde1e6; border-radius:6px; overflow:hidden; }
+  .card > .hd { padding:6px 10px; border-bottom:1px solid #eef1f4; font-size:12px; color:#44505f; background:#fafbfc; }
+  #vizHost { padding:6px; min-height:400px; }
+  #desc { padding:8px 10px; border-top:1px solid #eef1f4; font-size:13px; min-height:44px; }
+  #desc .tag { display:inline-block; padding:0 6px; margin-right:6px; border-radius:3px; background:#eef4ff; color:#1f6feb; font:11px ui-monospace, monospace; }
+  #side { display:flex; flex-direction:column; gap:10px; }
+  .kv { padding:6px 10px; font:12px/1.75 ui-monospace, Consolas, monospace; color:#333; }
+  .kv b { color:#1f6feb; font-weight:600; }
+  #track { width:100%; }
+  /* ---- 代码面板 ---- */
+  #code { font:12px/1.55 ui-monospace, Consolas, "Courier New", monospace; max-height:520px; overflow:auto; background:#fbfcfd; }
+  #code .ln { display:flex; gap:8px; padding:1px 8px 1px 0; white-space:pre; }
+  #code .no { width:30px; flex:0 0 30px; text-align:right; color:#b3bcc7; user-select:none; }
+  #code .tx { flex:1; }
+  #code .ln.cur { background:#fff5cc; box-shadow: inset 3px 0 0 #e3b341; }
+  #code .ln.cur .no { color:#9a6700; font-weight:700; }
+  #code .ln.done { color:#98a2b3; }
+  footer { padding:8px 14px; color:#7b8794; font-size:11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>算法动画回放</h1>
+  <label>算法 <select id="algo"></select></label>
+  <button id="btnFirst">⏮</button>
+  <button id="btnPrev">◀ 上一步</button>
+  <button id="btnPlay">▶ 播放</button>
+  <button id="btnNext">下一步 ▶</button>
+  <button id="btnLast">⏭</button>
+  <span id="meta">—</span>
+</header>
+
+<main>
+  <section class="card">
+    <div class="hd">对应代码（高亮 = 本步运行部位）</div>
+    <div id="code"></div>
+  </section>
+
+  <section class="card">
+    <div class="hd">可视化视窗（只按 shape 分派：graph / list / seq / stack / heap）</div>
+    <div id="vizHost"></div>
+    <div id="desc"><span class="tag" id="evTag">—</span><span id="descText">选择算法后按「播放」</span></div>
+  </section>
+
+  <aside id="side">
+    <div class="card">
+      <div class="hd">进度</div>
+      <div class="kv">
+        <div>步：<b id="stepNow">0</b> / <b id="stepAll">0</b></div>
+        <div>事件：<b id="evNow">—</b></div>
+        <div>运行部位：<b id="lineNow">—</b></div>
+      </div>
+      <div style="padding:0 10px 10px"><input type="range" id="track" min="0" max="0" value="0"></div>
+    </div>
+    <div class="card">
+      <div class="hd">数据来源</div>
+      <div class="kv" style="font-size:11px;color:#6b7684;line-height:1.7">
+        上游 <code>datastructure-agent</code> B 包<br>
+        <code>shared/algorithms/final/b/*.js</code><br>
+        经 <code>server/agent-adapter.js</code> 转成<br>N/E/M 统一图模型 + 源码行表
+      </div>
+    </div>
+  </aside>
+</main>
+
+<footer>B 包 8 个算法 · 每一步同时定位「代码运行部位 + 数据结构状态」· 整帧重建式重绘</footer>
+
+<script src="js/theme.js"></script>
+<script src="js/doc.js"></script>
+<script src="js/vmodel.js"></script>
+<script src="js/memcell.js"></script>
+<script src="js/stackheap.js"></script>
+<script src="js/arrayView.js"></script>
+<script src="js/linkView.js"></script>
+<script src="js/treeView.js"></script>
+<script src="js/dsCatalog.js"></script>
+<script src="js/shape.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/arbitrate.js"></script>
+<script src="js/viewport.js"></script>
+<script src="js/agentplayer.js"></script>
+</body>
+</html>

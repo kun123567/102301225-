@@ -1,0 +1,163 @@
+﻿/* app.css -- plus01&02 页面布局（窗口内部样式来自 add02 的 vendor/shell/window.css） */
+
+:root {
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --line: #e3e8ee;
+  --text: #172033;
+  --muted: #6b7686;
+  --accent: #1f6feb;
+  --accent-weak: #eaf2ff;
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; min-height: 100%;
+  font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: var(--text); background: var(--bg);
+}
+
+/* ---------- 顶栏 ---------- */
+.top {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 18px; background: #fff; border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand b { font-size: 15px; }
+.brand span { color: var(--muted); font-size: 12px; }
+.top .meta { margin-left: auto; color: var(--muted); font: 11px/1 var(--mono); }
+
+/* ---------- 三栏 ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr) 320px;
+  gap: 12px; padding: 12px;
+  align-items: start;
+}
+@media (max-width: 1200px) { .layout { grid-template-columns: 200px minmax(0, 1fr); } .right { display: none; } }
+
+.side, .center, .right { min-width: 0; }
+.side { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.side-block { margin-bottom: 8px; }
+#search {
+  width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px;
+  font: 12px inherit; outline: none;
+}
+#search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+
+.pkg-list { max-height: calc(100vh - 190px); overflow: auto; }
+.pkg { margin-bottom: 10px; }
+.pkg h3 {
+  margin: 8px 0 4px; font-size: 11px; letter-spacing: .03em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; display: flex; gap: 6px; align-items: baseline;
+}
+.pkg h3 span { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.item {
+  display: block; width: 100%; text-align: left; padding: 4px 8px; margin: 1px 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text);
+  font: 12px/1.5 inherit; cursor: pointer;
+}
+.item:hover { background: #f2f5fa; }
+.item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+
+/* ---------- 中间 ---------- */
+.center { display: flex; flex-direction: column; gap: 10px; }
+.crumb-bar {
+  display: flex; align-items: flex-end; gap: 10px; padding: 2px 2px 0;
+}
+.crumb { font-size: 15px; font-weight: 700; }
+.crumb-sub { color: var(--muted); font-size: 12px; }
+.crumb-right { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.badge { font: 11px/1 var(--mono); background: var(--accent-weak); color: var(--accent); padding: 4px 7px; border-radius: 5px; }
+.badge.ghost { background: #f3f5f9; color: var(--muted); }
+
+.controls { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.ctl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lbl { color: var(--muted); font-size: 11px; }
+.chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.chip {
+  padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: #fff;
+  font: 11px/1.6 inherit; cursor: pointer; color: var(--text);
+}
+.chip:hover { border-color: #c7d3e6; }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+select, input[type="range"] { font: 12px inherit; }
+select { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+button {
+  padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  font: 12px inherit; cursor: pointer;
+}
+button:hover { background: #f2f5fa; }
+.mono { font-family: var(--mono); }
+
+.error {
+  background: #fff1f0; border: 1px solid #ffccc7; color: #a8071a;
+  padding: 8px 10px; border-radius: 8px; font: 12px/1.6 var(--mono); white-space: pre-wrap;
+}
+
+/* 画布宿主：**每层一张 canvas 卡（与 06 的 .stage/.canvas-card 完全一致）**
+   add02 的 window.css 里 `.vizwin` 是 position:absolute;inset:0 + resize:both，
+   在宿主里必须改成 relative 固定高、并关掉 resize 手柄。 */
+.viz-host { position: relative; min-height: 640px; }
+.viz-host .win.vizwin {
+  position: relative; inset: auto; left: auto; top: auto;
+  width: 100%; height: 640px; min-height: 640px;
+  resize: none;
+}
+.viz-host .vizwin .win-bar { cursor: default; }
+
+/* 视口：可纵向滚动，里面是 .stage 网格（06：display:grid; gap:12px）
+   scrollbar-gutter: stable —— 滚动条**始终占位**。否则卡片高度一变就可能出现/消失滚动条，
+   内容宽度跟着抖 ~15px，布局随宽度变、高度又变 → "高度 ↔ 宽度 ↔ 滚动条" 自回环（每按一次变长一点）。 */
+.viz-host .vizwin .viewport-body { overflow-y: scroll; overflow-x: hidden; scrollbar-gutter: stable; padding: 40px 14px 30px; display: block; }
+.viz-host .vizwin .stage { display: grid; gap: 12px; }
+
+/* 卡片：06 的 .canvas-card 样式（卡头 = 标题 + 渲染器类名·style·格数） */
+.viz-host .canvas-card {
+  background: #fff; border: 1px solid #e3e8ee; border-radius: 8px; overflow: hidden;
+}
+.viz-host .canvas-card header {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 9px 13px; border-bottom: 1px solid #e3e8ee; font-size: 11px; color: #6b7686;
+}
+.viz-host .canvas-card header b { color: #172033; font-size: 12px; }
+.viz-host .canvas-card canvas { display: block; width: 100%; height: 300px; background: #fff; }
+
+/* 步数计数：add02 的 window.css 里没有 `.tl-count`，必须自己给样式，
+   否则它作为 flex 子项会把 5 个 30px 按钮挤出/挤压。 */
+.viz-host .tl-count {
+  flex: 0 0 auto; min-width: 62px; text-align: right;
+  font: 11px/1 var(--mono); color: #6b7686; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 1100px) { .viz-host .tl-count { min-width: 52px; font-size: 10px; } }
+
+/* 播放按钮保持 add02 的强调色（靠 #playBtn），按下态另有反馈 */
+.viz-host .vizwin .tl-btn[aria-pressed="true"] { background: #6650cf; border-color: #6650cf; color: #fff; }
+
+body.is-viz-full .viz-host .win.vizwin { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 999; }
+
+/* ---------- 右栏 ---------- */
+.right { display: flex; flex-direction: column; gap: 10px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.panel h4 { margin: 0 0 6px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.code { list-style: none; margin: 0; padding: 0; font: 12px/1.7 var(--mono); max-height: 240px; overflow: auto; counter-reset: ln; }
+.code li { display: flex; gap: 8px; padding: 1px 6px; border-radius: 5px; white-space: pre; }
+.code li.active { background: #fff7d6; outline: 1px solid #ffe58f; }
+.code li .ln { color: #a8b2c1; min-width: 18px; text-align: right; }
+.code li.empty { color: var(--muted); font-family: inherit; }
+.kv { display: flex; gap: 8px; padding: 2px 0; }
+.kv .k { color: var(--muted); min-width: 40px; font-size: 11px; }
+.kv .v { flex: 1; word-break: break-all; }
+.hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.hint code { background: #f3f5f9; padding: 0 4px; border-radius: 3px; font: 11px var(--mono); }
+
+/* 调试：?debug=1 时卡头右侧显示 "宽x高"（默认不显示，不影响视觉） */
+body.is-debug .viz-host .canvas-card header::after {
+  content: attr(data-size);
+  margin-left: auto;
+  font: 10px/1 var(--mono, monospace);
+  color: #94a3b8;
+}

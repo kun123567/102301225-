@@ -1,0 +1,91 @@
+/* anim.css -- plus01&02 的**动画挂载点**：全部挂在 svg 元素上（不再是 canvas 整帧重绘）
+ *
+ * 两层结构（与 app/prim-dom.js 一一对应，别合并回一层）：
+ *   .avc-pos              外层：只负责定位 style.transform=translate(x,y) → 这里给它 transition
+ *   .avc-el               内层：只负责状态动画（enter / exit / flash / dim）
+ *
+ * 为什么要分两层：CSS 动画在层叠里**高于 inline style**，`animation-fill-mode: both`
+ * 会让最后一帧的 `transform: scale(1)` 永久压住定位层的 `translate(x,y)`——
+ * 表现就是"元素停在原点、越往下越错位、最后看不见"。
+ * 定位与动画分层后，动画层怎么缩放都动不到定位层的 translate。
+ *
+ * 动画只做透明度/缩放这类"不改变布局"的变化，几何仍由引擎算。
+ */
+
+.avc-svg-wrap {
+  position: relative;
+  width: 100%;
+  background: #fff;
+  border-radius: 0 0 10px 10px;
+  overflow: hidden;
+}
+
+.avc-svg {
+  display: block;
+  width: 100%;
+  background: #fff;
+}
+
+/* 定位层：位置补间（唯一允许碰 transform 的地方） */
+.avc-pos {
+  transition: transform 280ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity 200ms ease;
+}
+
+/* 动画层：缩放围绕自身盒子中心 */
+.avc-el {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 200ms ease;
+}
+
+.avc-el > text,
+.avc-el text {
+  font-family: inherit;
+  user-select: none;
+}
+
+@keyframes avc-enter-kf {
+  from { opacity: 0; transform: scale(0.86); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes avc-exit-kf {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.9); }
+}
+
+@keyframes avc-flash-kf {
+  0%   { opacity: 1; }
+  40%  { opacity: 0.45; }
+  100% { opacity: 1; }
+}
+
+/* dim 不循环：透明度已由 inline style 表达，这里只保证平滑过渡（不新增动效） */
+
+.avc-pos.avc-move   { transition-duration: 300ms; }   /* 位置补间（transform transition 挂在定位层） */
+.avc-el.avc-move    { transition-duration: 300ms; }
+.avc-el.avc-enter   { animation: avc-enter-kf 260ms ease-out; }
+.avc-el.avc-exit    { animation: avc-exit-kf 200ms ease-in forwards; pointer-events: none; }
+.avc-el.avc-flash   { animation: avc-flash-kf 320ms ease-in-out 1; }
+.avc-el.avc-dim     { animation: none; transition: opacity 200ms ease; }
+
+/* 尊重系统"减少动态效果" */
+@media (prefers-reduced-motion: reduce) {
+  /* 只关"位移/缩放"，**保留透明度变化**：
+     全关掉的话，系统开了"减少动态效果"的机器上整幅图看起来像没有动画（用户实测过）。 */
+  .avc-pos { transition: none; }
+  .avc-el { transition: opacity 200ms ease; }
+  .avc-el.avc-enter { animation: avc-fade-kf 220ms ease-out; }
+  .avc-el.avc-flash { animation: avc-flash-kf 320ms ease-in-out 1; }
+  .avc-el.avc-exit { animation: avc-fadeout-kf 200ms ease-in forwards; }
+}
+
+@keyframes avc-fade-kf {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes avc-fadeout-kf {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}

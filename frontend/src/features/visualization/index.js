@@ -1,6 +1,5 @@
 import { arraySearch } from '../workbench/array-search.js';
 import { createExplanationPanel } from './explanation-panel.js';
-
 /**
  * 成员03 · 数组动画渲染（主责路径 frontend/src/features/visualization/）
  *
@@ -63,15 +62,21 @@ function prefersReducedMotion() {
  */
 export function describeStep(step) {
   if (!step) return '无步骤数据';
+  /* 自定义代码（插桩追踪）用的是"行号 + 本步动的格子"这套语义，没有 left/right/mid。
+     以前会掉进下面的二分查找文案，页面上出现"当前区间 undefined～undefined"（评审报告 §3.9）。 */
+  if (step.algorithm === 'custom-engine') {
+    const vars = step.variables || {};
+    const line = vars.line ?? Number(step.lineId) ?? null;
+    const idx = vars.index;
+    return '第 ' + (step.stepIndex + 1) + ' 步 ｜ 正在执行第 ' + (line ?? '?') + ' 行'
+      + (idx == null ? '' : ' ｜ 本步动的格子：' + idx);
+  }
   if (arraySearch(step.algorithm)) {
     const { index, comparisons } = step.variables;
     const position = index === null ? '' : ' ｜ A[' + index + '] = ' + step.array[index];
     return '第 ' + (step.stepIndex + 1) + ' 步 ｜ 目标 ' + step.target + position + ' ｜ 已比较 ' + comparisons + ' 次';
   }
-  // 适配所有排序算法
-  if (step.algorithm.endsWith('-sort') || step.algorithm === 'custom-array') {
-    return `第 ${step.stepIndex + 1} 步：${step.description}`;
-  }
+  if (step.algorithm === 'bubble-sort' || step.algorithm === 'custom-array') return `第 ${step.stepIndex + 1} 步：${step.description}`;
   const { array = [], target, variables = {}, event, done, result } = step;
   const { left, right, mid } = variables;
   const parts = [`第 ${step.stepIndex + 1} 步：${EVENT_TEXT[event] ?? event}`];
@@ -100,9 +105,13 @@ export function describeStep(step) {
 export function describeTransition(previous, current) {
   if (!current) return '';
   if (arraySearch(current.algorithm)) return current.description;
-  // 适配所有排序算法
-  if (current.algorithm.endsWith('-sort') || current.algorithm === 'custom-array') return current.description;
-  
+  if (current.algorithm === 'bubble-sort' || current.algorithm === 'custom-array') return current.description;
+  /* 自定义代码：只说"第几步、哪一行"，不要编 left/right */
+  if (current.algorithm === 'custom-engine') {
+    const line = (current.variables && current.variables.line) ?? Number(current.lineId) ?? null;
+    if (!previous) return '开始：第 ' + (line ?? '?') + ' 行';
+    return '第 ' + (current.stepIndex + 1) + ' 步：第 ' + (line ?? '?') + ' 行';
+  }
   const { array = [], target, variables = {}, event, result } = current;
   const { left, right, mid } = variables;
   const last = array.length - 1;
