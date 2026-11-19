@@ -302,7 +302,31 @@ test('§4-1 scanf 按转换序号判定：跨数组/标量占位/一维二维混
       name: '一维与二维混合（第二项失败）',
       stdin: '7 x',
       src: ['  int a[2];', '  int g[2][2];', '  int read;', '  read = scanf("%d %d", &a[0], &g[0][0]);', '  printf("%d %d\\n", read, a[0]);'],
-      want: { labels: { a: ['7', '?'] }, matrix: { g: [[7, '·'], ['·', '·']] }, stdout: /^1\s/ },
+      want: { labels: { a: ['7', '?'] }, matrix: { g: [['·', '·'], ['·', '·']] }, stdout: /^1\s/ },
+    },
+    {
+      name: '二维数组在前且第一项写入成功',
+      stdin: '7 x',
+      src: ['  int a[2];', '  int g[2][2];', '  int read;', '  read = scanf("%d %d", &g[0][0], &a[0]);', '  printf("%d %d\\n", read, g[0][0]);'],
+      want: { labels: { a: ['?', '?'] }, matrix: { g: [[7, '·'], ['·', '·']] }, stdout: /^1\s7$/ },
+    },
+    {
+      name: '跳过第一项后写入数组',
+      stdin: '99 7',
+      src: ['  int a[2];', '  int read;', '  read = scanf("%*d %d", &a[0]);', '  printf("%d %d\\n", read, a[0]);'],
+      want: { labels: { a: ['7', '?'] }, stdout: /^1\s7$/ },
+    },
+    {
+      name: '跳过中间项后，第三项仍对应第二个参数',
+      stdin: '7 99 8',
+      src: ['  int a[2];', '  int read;', '  read = scanf("%d %*d %d", &a[0], &a[1]);', '  printf("%d %d %d\\n", read, a[0], a[1]);'],
+      want: { labels: { a: ['7', '8'] }, stdout: /^2\s7\s8$/ },
+    },
+    {
+      name: '%n 占用标量参数但不占成功序号',
+      stdin: '7 8',
+      src: ['  int a[2];', '  int used;', '  int read;', '  read = scanf("%d%n%d", &a[0], &used, &a[1]);', '  printf("%d %d %d\\n", read, a[0], a[1]);'],
+      want: { labels: { a: ['7', '8'] }, stdout: /^2\s7\s8$/ },
     },
   ];
   for (const item of cases) {
@@ -316,28 +340,37 @@ test('§4-1 scanf 按转换序号判定：跨数组/标量占位/一维二维混
       assert.ok(layer, item.name + '：缺少 ' + key + ' 层');
       assert.deepEqual(layer.data.labels, want, item.name + ' → ' + key + ' 标签不符');
     }
+    for (const [key, want] of Object.entries(item.want.matrix || {})) {
+      const layer = layers.find((l) => l.id === 'mat:' + key);
+      assert.ok(layer, item.name + '：缺少 ' + key + ' 层');
+      assert.deepEqual(layer.data.values, want, item.name + ' → ' + key + ' 矩阵格子不符');
+    }
   }
 });
 
-test('§4-2 二维数组 memcpy 只标完整覆盖的元素（一个/一行/跨行三个/整块）', { skip }, async () => {
+test('§4-2 二维数组 memcpy 按字节覆盖标记完整元素', { skip }, async () => {
   const cases = [
-    { name: '复制一个元素', size: 'sizeof(int)', want: [[7, '·'], ['·', '·']], out: '7' },
-    { name: '复制一整行', size: '2 * sizeof(int)', want: [[7, 8], ['·', '·']], out: '8' },
-    { name: '跨行三个元素', size: '3 * sizeof(int)', want: [[7, 8], [9, '·']], out: '9' },
-    { name: '整块覆盖', size: 'sizeof(g)', want: [[7, 8], [9, 10]], out: '10' },
+    { name: '复制一个字节', size: 'sizeof(char)', print: '(int)sizeof(char)', want: [['·', '·'], ['·', '·']], out: '1' },
+    { name: '复制一个元素', size: 'sizeof(int)', print: 'g[0][0]', want: [[7, '·'], ['·', '·']], out: '7' },
+    { name: '复制一整行', size: 'sizeof(g[0])', print: 'g[0][1]', want: [[7, 8], ['·', '·']], out: '8' },
+    { name: '跨行三个元素', size: '3 * sizeof(int)', print: 'g[1][0]', want: [[7, 8], [9, '·']], out: '9' },
+    { name: '整块覆盖', size: 'sizeof(g)', print: 'g[1][1]', want: [[7, 8], [9, 10]], out: '10' },
+    { name: '长度表达式只求值一次', size: '(++calls, sizeof(int))', print: 'calls', declare: 'int calls = 0;',
+      want: [[7, '·'], ['·', '·']], out: '1' },
   ];
   for (const item of cases) {
     const code = [
       '#include <stdio.h>', '#include <string.h>', 'int main(void)', '{',
       '  int g[2][2];', '  int b[2][2] = {{7, 8}, {9, 10}};',
+      ...(item.declare ? [item.declare] : []),
       `  memcpy(g, b, ${item.size});`,
-      `  printf("%d\\n", g${item.name === '跨行三个元素' ? '[1][0]' : item.name === '整块覆盖' ? '[1][1]' : item.name === '复制一整行' ? '[0][1]' : '[0][0]'});`,
+      `  printf("%d\\n", ${item.print});`,
       '  return 0;', '}',
     ].join('\n');
     const trace = await runC(code);
     assert.equal(trace.ok, true, item.name + ' 运行失败');
     assert.equal(String(trace.stdout).replace(/\r/g, '').trim(), item.out, item.name + ' 原程序输出不符');
-    const mat = trace.layerRun.steps.at(-1).layers.find((l) => l.style === 2);
+    const mat = trace.layerRun.steps.at(-1).layers.find((l) => l.id === 'mat:g');
     assert.ok(mat, item.name + '：缺少矩阵层');
     assert.deepEqual(mat.data.values, item.want, item.name + ' 只应标记完整覆盖的格子：' + JSON.stringify(mat.data.values));
   }

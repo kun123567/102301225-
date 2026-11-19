@@ -542,15 +542,10 @@ function writeMarkCalls(lineNo, text, structArrayFields, defines) {
  * 但**标多标少**都必须按真实结果来（报告 §3）：
  *   · `scanf` 用返回值决定"前几项成功"：`scanf("%d %d", &a[0], &a[1])` 输入 `7 x` 只成功 1 项，
  *     a[1] 仍是未初始化内存 —— 不能两个格子都标已知；全部失败就一个都不标。
- *   · `memcpy/memset` 按**实际覆盖的完整元素数**标：`sizeof(int)` 是 1 个元素、
- *     `sizeof(a)` 是整块、`k * sizeof(T)` 是 k 个；算不出来（变量长度）就一个都不标，保持未知。
- * @returns {{before: string[], after: string[]}} before 插在语句前，after 插在语句后
+ *   · 内存函数在原调用中保存实际的字节数，调用返回后按目标元素大小标记完整写入。
  */
-function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
-  const s = String(text || '');
-  const before = [];
+function libWriteCalls(lineNo, s, visible, macroBodies) {
   const after = [];
-  const seen = new Set();
 
   /* ---- scanf / fscanf：按**整次调用的转换序号**标记（报告 §1） ---- */
   const scan = /\b(scanf|fscanf)\s*\(/.exec(s);
@@ -568,10 +563,12 @@ function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
         const targets = args.slice(fmtIndex + 1);
         /* 有序目标表：每个"会计入返回值"的转换对应一个参数（标量也要占位，报告明确要求保留位置） */
         let ord = 0;
-        for (let i = 0; i < conversions.length; i++) {
-          if (conversions[i] === 'suppressed') continue;                // %*d 不消耗参数、不计入返回值
+        let targetIndex = 0;
+        for (const conversion of conversions) {
+          if (conversion === 'suppressed') continue;                  // %*d 不消耗参数、不计入返回值
+          const arg = String(targets[targetIndex++] || '').trim();
+          if (conversion === 'noncounting') continue;                 // %n 消耗参数，不计入返回值
           ord += 1;
-          const arg = String(targets[i] || '').trim();
           const ref = /^&\s*([A-Za-z_]\w*)\s*((?:\[[^\]]*\]\s*)+)$/.exec(arg);
           if (!ref) continue;                                          // 标量目标：占位但不发标记
           const name = ref[1];
@@ -595,62 +592,32 @@ function libWriteCalls(lineNo, text, dimsOf, macroBodies) {
     }
   }
 
-  /* ---- memcpy / memmove / memset：按覆盖的完整元素数标记 ---- */
-  for (const call of s.matchAll(/\b(memcpy|memmove|memset)\s*\(\s*&?\s*([A-Za-z_]\w*)\s*[,)]/g)) {
-    const name = call[2];
-    const dims = dimsOf && dimsOf.get(name);
-    if (!dims || !dims.length) continue;
-    const open = s.indexOf('(', call.index);
-    const close = open >= 0 ? matchParen(s, open) : -1;
-    if (close < 0) continue;
-    const args = s.slice(open + 1, close).split(',');
-    /* memset 的尺寸是第 3 个参数，memcpy/memmove 是第 3 个（dest,src,n） */
-    const sizeText = (args[2] || '').trim();
-    const count = copyElementCount(sizeText, name, dims);
-    if (count == null) continue;                       // 算不出来 → 一格都不标，保持未知
-    const key = name + '|copy';
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (count >= dims[0] && dims.length === 1) { after.push(`__avc_init(${lineNo},"${name}",${dims[0]});`); continue; }
-    if (dims.length === 2) {
-      /* 二维：按**线性元素下标**逐格映射成行列（报告 §2）。
-         以前把"覆盖元素数"向上取整成行数、再把整行都标成已写，
-         于是 `memcpy(g, b, sizeof(int))` 会把第一行两格都标已知。 */
-      const cols = dims[1] || 1;
-      const total = dims[0] * cols;
-      if (count >= total) { after.push(`__avc_init2(${lineNo},"${name}",${dims[0]},${dims[1]});`); continue; }
-      for (let i = 0; i < Math.min(count, total); i++) {
-        after.push(`__avc_w2(${lineNo},"${name}",${Math.floor(i / cols)},${i % cols});`);
-      }
-      continue;
-    }
-    for (let i = 0; i < Math.min(count, dims[0]); i++) after.push(`__avc_w(${lineNo},"${name}",${i});`);
-  }
-  return { before, after };
+  /* 只有独立调用或简单赋值能保证执行到了这里。保留原调用，仅在第三个参数
+     求值时保存结果，避免再次执行长度表达式里的函数调用或自增。 */
+  const copy = /^(?:[A-Za-z_]\w*\s*=\s*)?(?:memcpy|memmove|memset)\s*\(/.exec(s);
+  if (!copy) return { after };
+  const open = copy[0].length - 1;
+  const close = matchParen(s, open);
+  if (close < 0 || s.slice(close + 1).trim() !== ';') return { after };
+
+  const args = splitTopLevel(s.slice(open + 1, close), ',');
+  if (args.length !== 3 || !args[2].trim()) return { after };
+  const name = /^&?\s*([A-Za-z_]\w*)$/.exec(args[0].trim())?.[1];
+  const dims = name && visible.findLast((variable) => variable.name === name)?.dims;
+  if (!dims || dims.length > 2) return { after };
+
+  const [first, second] = dims;
+  const elementSize = second ? `sizeof(${name}[0][0])` : `sizeof(${name}[0])`;
+  // 采样列数有上限，计算线性位置时仍使用真实行宽。
+  const stride = second ? `sizeof(${name}[0]) / ${elementSize}` : '0';
+  args[2] = `(__avc_copy_bytes = (size_t)(${args[2]}))`;
+  after.push(`__avc_copy_written(${lineNo},"${name}",__avc_copy_bytes,${elementSize},${second ? first : 0},${second || first},${stride});`);
+  return { after, copyBody: s.slice(0, open + 1) + args.join(',') + s.slice(close) };
 }
 
 /**
- * `sizeof(a)` / `sizeof(int)` / `k * sizeof(T)` / `sizeof(T) * k` → 覆盖了几个完整元素。
- * 算不出来（含变量长度、或 size 不是 sizeof 形式）返回 null。
- */
-function copyElementCount(sizeText, name, dims) {
-  const t = String(sizeText || '').trim();
-  if (!t) return null;
-  if (new RegExp('^sizeof\\s*\\(?\\s*' + name + '\\b').test(t)) {
-    /* 整块：1D 就是采样长度，2D 是 rows*cols */
-    return dims.length >= 2 ? dims[0] * dims[1] : dims[0];
-  }
-  const single = /^sizeof\s*\(\s*[A-Za-z_][\w\s*]*\s*\)$/.test(t) || /^sizeof\s+[A-Za-z_]\w*$/.test(t);
-  if (single) return 1;                                  // sizeof(int) → 一个元素
-  const kTimes = /^(\d+)\s*\*\s*sizeof\s*\(?/.exec(t) || /^sizeof\s*\(?[^)]*\)?\s*\*\s*(\d+)$/.exec(t);
-  if (kTimes) return Number(kTimes[1]);
-  return null;
-}
-
-/**
- * 数一次 scanf 里的转换项（按顺序）：返回数组，每项是 'normal' 或 'suppressed'（`%*d`）。
- * 返回 null 表示格式串无法可靠解析（非字面量 / 含 `%%` 以外无法识别的东西也不必怕，`%%` 直接跳过）。
- * 只有"会计入返回值"的转换才消耗参数并对齐序号（报告 §1：标量目标也要占位）。
+ * 按顺序解析转换项。抑制赋值的 %*d 不占用参数，%n 占用参数但不增加返回值。
+ * %% 是字面量，扫描集内部字符属于同一个转换项。
  */
 function countScanfConversions(format) {
   const out = [];
@@ -663,8 +630,17 @@ function countScanfConversions(format) {
     if (text[i] === '*') { suppressed = true; i += 1; }
     /* 跳过标志/宽度/长度修饰，直到拿到转换字符 */
     while (i < text.length && /[-+ #0-9.hlLjzt]/.test(text[i])) i += 1;
-    if (i >= text.length) break;
-    out.push(suppressed ? 'suppressed' : 'normal');
+    const specifier = text[i];
+    if (specifier === '[') {
+      let start = i + 1;
+      if (text[start] === '^') start += 1;
+      if (text[start] === ']') start += 1;
+      i = text.indexOf(']', start);
+      if (i < 0) return null;
+    } else if (!specifier || !/[diouxXfFeEgGaAcspn]/.test(specifier)) {
+      return null;
+    }
+    out.push(suppressed ? 'suppressed' : (specifier === 'n' ? 'noncounting' : 'normal'));
   }
   return out;
 }
@@ -975,8 +951,6 @@ function instrument(source, opt) {
   const globals = [];
   /* 结构体数组（`Item a[4]`）→ 它的字段视图名，写入标记据此分发到 `a.key` / `a.aux`（整条拷贝时全都算写过） */
   const structArrayFields = new Map();
-  /* name → 采样维度：给 scanf/memcpy/memset 的写入标记用 */
-  const arrayDimsOf = new Map();
   for (let i = 0; i < code.length; i++) {
     /* 结构体/类的"成员声明区"跳过；但**成员函数体内部**要照常收集局部变量
        （`Trie* node = this;` / `int ch = ...` 全在这里，不收集就没有每一步的值） */
@@ -1009,7 +983,6 @@ function instrument(source, opt) {
       });
       if (!fn) globals.push(rec);
       else vars.push(rec);
-      if (rec.dims && rec.dims.length) arrayDimsOf.set(rec.name, rec.dims);
 
       /* 结构体字段也要能看见：S.data[i] / S.top
        * 此前只观测"函数首层普通变量"，于是 SqStack.data/SqList.elem 这类字段完全不可见，
@@ -1351,12 +1324,8 @@ function instrument(source, opt) {
        这样下标表达式还是"写入前"的值（`a[j] = a[j+1]` 的 j 不会被语句改掉）。
        折叠层靠它区分"写过的格子"和"从没初始化过的格子"，不再拿数值大小猜垃圾。
        库函数（scanf/memcpy/memset）可能还有"语句之后才知道"的标记（scanf 的成功项数）。 */
-    const libMarks = libWriteCalls(lineNo, trimmed, arrayDimsOf, macroBodies);
-    const writeMark = [
-      ...writeMarkCalls(lineNo, trimmed, structArrayFields, macroBodies),
-      ...libMarks.before,
-    ];
-    const afterMark = libMarks.after;
+    const { after: afterMark, copyBody } = libWriteCalls(lineNo, trimmed, visible, macroBodies);
+    const writeMark = writeMarkCalls(lineNo, trimmed, structArrayFields, macroBodies);
     /* 裸 `scanf(...)`：把整句包成 `int _avc_sc = (scanf(...));` 才能拿到"成功赋值项数"。
        只求值一次、求值顺序不变（就是一个赋值表达式的初始化）。 */
     const bareScan = afterMark.length && /^(?:scanf|fscanf)\s*\(/.test(trimmed);
@@ -1376,8 +1345,9 @@ function instrument(source, opt) {
     } else {
       const mark = writeMark.length ? ' ' + writeMark.join(' ') : '';
       const tail = afterMark.length ? ' ' + afterMark.join(' ') : '';
-      const body = bareScan ? `int _avc_sc = (${trimmed.replace(/;\s*$/, '')});` : codeLine;
-      out.push(`{ __avc_t(${lineNo});${mark} ${body}${wtail}${tail} }`);
+      const body = bareScan ? `int _avc_sc = (${trimmed.replace(/;\s*$/, '')});` : (copyBody ?? codeLine);
+      const declaration = copyBody ? 'size_t __avc_copy_bytes; ' : '';
+      out.push(`{ ${declaration}__avc_t(${lineNo});${mark} ${body}${wtail}${tail} }`);
     }
     steps.push(lineNo);
   }

@@ -247,6 +247,22 @@ static void __avc_w2(int line, const char* name, int r, int c)
     __avc_out(b);
 }
 
+/* Record sampled elements fully covered by a memory write. */
+static void __avc_copy_written(int line, const char* name, size_t bytes,
+                               size_t element_size, int rows, int cols, size_t stride)
+{
+    size_t count = bytes / element_size;
+    int r, c;
+    if (rows == 0) {
+        for (c = 0; c < cols && (size_t)c < count; c++) __avc_w(line, name, c);
+        return;
+    }
+    for (r = 0; r < rows; r++) {
+        for (c = 0; c < cols && (size_t)r * stride + (size_t)c < count; c++)
+            __avc_w2(line, name, r, c);
+    }
+}
+
 /* 初始化记录：`int a[3] = {1, 2000000, 3000000};` 这种"声明时就给了值"的数组，
  * 所有格子都算已初始化（C 会把剩下的补 0）。有了它，就不必靠"数值大小像不像垃圾"来判断，
  * 合法的大整数不会被当成未初始化数据。 */
