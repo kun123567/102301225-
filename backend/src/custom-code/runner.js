@@ -6,6 +6,8 @@ import { delimiter, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { compileSource } from './compile-source.js';
+import { buildHarness, engineTraceToRun } from './function-harness.js';
+import { traceProgram } from './detect-engine.js';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../../third_party/open-watcom/', import.meta.url));
@@ -118,12 +120,72 @@ function makeTrace(stdout, array, program, language) {
   return { algorithm: 'custom-array', sourceVersion, sourceLines, steps, result: state };
 }
 
-export async function runCustomCode(input) {
+/** 引擎链路与极简链路共用的输入校验 */
+function validateCustomInput(input) {
   const { language, source, array } = input ?? {};
   if (typeof language !== 'string' || !Object.hasOwn(compilers, language) || typeof source !== 'string' || !source.trim() || source.length > 5000 ||
       !Array.isArray(array) || array.length > 24 || !array.every(value => Number.isInteger(value) && value >= -2147483648 && value <= 2147483647)) {
     throw new CodeRunError(400, 'INVALID_INPUT', '请输入 C 或 C++ 代码，以及最多 24 个 32 位整数。代码上限为 5000 字符。');
   }
+  return { language, source, array };
+}
+
+/**
+ * 引擎链路：只写 `void f(int a[], int n) { … }`，由 function-harness 自动补 main，
+ * 再用 detect-engine（base 插桩 + 本仓库 Open Watcom）拿真实执行事件，折叠成 custom-array 的 steps。
+ *
+ * 与极简链路（runCustomCode）的区别：
+ *   极简链路把代码翻译成一个受限子集（只认 int 变量/数组读写/if/for/while）；
+ *   引擎链路**真编译**用户写的 C/C++（结构体、指针、STL 都可以），因此能跑更接近教材的代码。
+ */
+export async function runCustomCodeWithEngine(input) {
+  const { language, source, array } = validateCustomInput(input);
+  const harness = buildHarness({ source, array });
+  if (!harness.ok) throw new CodeRunError(422, 'HARNESS_FAILED', harness.error);
+  if (!(await compilerAvailable(language))) {
+    throw new CodeRunError(503, 'COMPILER_UNAVAILABLE', '未找到本机 Windows Open Watcom 工具链。');
+  }
+  const trace = await traceProgram({ code: harness.code, lang: language, maxSteps: 4000 });
+  if (!trace.ok) {
+    const first = (trace.diags || []).find((diag) => diag.sev === 'error');
+    const detail = first ? `第 ${first.line} 行：${first.message}` : (trace.stage === 'instrument' ? trace.log : '代码编译未通过。');
+    throw new CodeRunError(422, 'CODE_COMPILE_ERROR', String(detail || '代码编译未通过。').slice(0, 300));
+  }
+  /* 与整程序模式一致：退出码/截断必须往上传（下层 trace 的 ok:true 只表示"有可用轨迹"，
+     不代表程序正常结束）—— 评审报告 §3.7。 */
+  const run = engineTraceToRun({
+    trace: {
+      events: trace.events,
+      truncated: trace.truncated,
+      abnormalExit: trace.abnormalExit,
+      exitCode: trace.exitCode,
+    },
+    harness,
+    initialArray: array,
+    sourceVersion: `local-engine-${language}-v1`,
+  });
+  if (!run.ok) throw new CodeRunError(422, 'ENGINE_NO_STEPS', run.error);
+  run.meta = {
+    ...(run.meta || {}),
+    degradedMode: trace.degradedMode,
+    engineSteps: trace.steps,
+    entry: harness.entry,
+    exitCode: trace.exitCode ?? null,
+    abnormalExit: Boolean(trace.abnormalExit),
+    truncated: Boolean(trace.truncated),
+  };
+  return run;
+}
+
+export async function runCustomCode(input) {
+  /* 先判断"这是不是整程序"，再谈长度：否则 5000 字符的极简限制会先把整程序拦成
+     "请输入 … 代码上限为 5000 字符"，用户同样看不出该用整程序模式。 */
+  const rawSource = typeof input?.source === 'string' ? input.source : '';
+  if (/^\s*#\s*(?:include|define)\b/m.test(rawSource) || /\b(?:typedef|struct|class)\b/.test(rawSource) || /(^|\n)\s*(?:(?:int|void)\s+)?main\s*\(/.test(rawSource)) {
+    throw new CodeRunError(422, 'PROGRAM_MODE_REQUIRED',
+      '这段是完整的 C/C++ 源码（含 #include / struct / main），极简模式只接受函数体。请保留 main 直接运行（整程序模式），或只贴 `void f(int a[], int n) { … }` 函数。');
+  }
+  const { language, source, array } = validateCustomInput(input);
   let program;
   try {
     program = compileSource(source);

@@ -1,3 +1,6 @@
 # Preserve the original toolchain bytes and upstream whitespace.
 /third_party/open-watcom/builder/** -text -whitespace
 /third_party/open-watcom/owcpp/** -text -whitespace
+
+# 网上取来的样例要逐字节原样（测试用 sha256 钉住），不要让 git 转行尾。
+/frontend/samples/** -text -whitespace

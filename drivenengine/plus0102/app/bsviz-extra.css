@@ -1,0 +1,100 @@
+﻿/* bsviz-extra.css -- **新增原型**的样式（数组族不用它：那族直接吃宿主的 visualization.css）
+ *
+ * 命名刻意跟宿主同前缀 `bsviz-*`，但**不改**任何既有规则：
+ *   · 宿主已定义的类（bsviz-cell / bsviz-ptr-* / is-in-range …）一律不在此文件出现；
+ *   · 这里只定义宿主没有的：`.bsviz-x*`（通用图元容器）与 `.bsviz-wrap`（我这边卡片的画布容器）。
+ *
+ * 动画挂载点与宿主一致：
+ *   · 轨道上 `[data-anim]` 驱动整体入场（`bsviz-x-enter` 错峰由 JS 加在元素上）
+ *   · 位置变化靠 `transition: left/top`（等价于宿主的 FLIP 效果，但通用族用 CSS 更省）
+ */
+
+.bsviz-wrap {
+  position: relative;
+  width: 100%;
+  background: #fff;
+  border-radius: 0 0 10px 10px;
+  overflow: hidden;
+  padding: 8px 0 0;
+  box-sizing: border-box;
+}
+
+/* 数组族：交给宿主的 .bsviz / .bsviz-track / .bsviz-cell（不在此文件里重定义） */
+.bsviz-wrap > .bsviz {
+  height: 100%;
+}
+
+/* 通用族（树/图/链表/栈/堆/表格/并集）的新增原型 */
+.bsviz-x {
+  position: relative;
+  height: 100%;
+}
+
+.bsviz-x-track {
+  position: absolute;
+  inset: 0;
+  display: block;
+  padding: 0;
+}
+
+.bsviz-x-el {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: transparent;
+  font: 600 12px/1.2 system-ui, "Microsoft YaHei", sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: left 220ms cubic-bezier(.22, .68, .32, 1), top 220ms cubic-bezier(.22, .68, .32, 1),
+              width 220ms ease, height 220ms ease, opacity 180ms ease,
+              background 180ms ease, border-color 180ms ease;
+  will-change: left, top;
+}
+
+.bsviz-x-text {
+  border: 0;
+  background: transparent;
+  justify-content: center;
+  align-items: center;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+/* 线段/折线：细条 + rotate（在 html-stage 里按两端点算长度与角度） */
+.bsviz-x-line {
+  border: 0;
+  border-radius: 0;
+  background: #94a3b8;
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
+.bsviz-x-chip {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+}
+
+@keyframes bsviz-x-enter-kf {
+  from { opacity: 0; transform: translateY(4px) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+.bsviz-x-el.bsviz-x-enter {
+  animation: bsviz-x-enter-kf 240ms cubic-bezier(.22, .68, .32, 1) both;
+}
+
+.bsviz-error {
+  color: #a92e35;
+  font: 600 12px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+  padding: 8px 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bsviz-x-el { transition: none; }
+  .bsviz-x-el.bsviz-x-enter { animation: none; }
+}

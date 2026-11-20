@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AnyviewC 可视化学习环境 · prototype01</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 菜单栏 ============ -->
+  <header id="menubar">
+    <div class="brand">AnyviewC<span class="sub">可视化学习环境 · prototype01</span></div>
+    <nav id="menus">
+      <div class="menu" data-menu="file">文件</div>
+      <div class="menu" data-menu="edit">编辑</div>
+      <div class="menu" data-menu="search">查找</div>
+      <div class="menu" data-menu="run">运行</div>
+      <div class="menu" data-menu="tool">工具</div>
+      <div class="menu" data-menu="view">视图</div>
+      <div class="menu" data-menu="help">帮助</div>
+    </nav>
+    <div class="grow"></div>
+    <label class="lang-pick" title="后端分别调用自编的 bwcc386 / wpp386">
+      语言
+      <select id="lang">
+        <option value="c">C</option>
+        <option value="cpp">C++</option>
+      </select>
+    </label>
+  </header>
+
+  <!-- ============ 运行栏 ============ -->
+  <div id="runbar">
+    <div class="speed" title="定速运行的间隔">
+      <span>速度</span>
+      <input type="range" id="speed" min="1" max="100" value="55">
+      <span id="speedVal" class="mono">55</span>
+    </div>
+    <div class="btn-group">
+      <button data-act="compile" title="编译 (C)">编译</button>
+      <button data-act="compileRun" title="编译并运行 (A)">编译并运行</button>
+      <button data-act="autoRun" title="定速运行 (T)">定速运行</button>
+      <button data-act="run" title="连续运行到结束 (R)，用下方 stdin 文本框喂输入">运行</button>
+      <button data-act="consoleRun" title="编译后在桌面新开控制台窗口交互运行（可用键盘输入）">控制台运行</button>
+      <button data-act="pause" title="暂停 (P)">暂停</button>
+      <button data-act="stop" title="停止 (S)">停止</button>
+    </div>
+    <div class="btn-group">
+      <button data-act="stepOver" class="primary" title="下一行 (N)">下一行</button>
+      <button data-act="stepInto" title="进入函数 (I)">进入</button>
+      <button data-act="stepInstr" disabled title="单指令 (Z)：样品未实现，已用行级单步替代">单指令</button>
+    </div>
+    <div class="grow"></div>
+    <label class="lang-pick" title="内置样例：26 项数据结构例题 + 基础样例，选中即插桩并停在第 1 步">
+      样例
+      <select id="samplePick" style="max-width:260px">
+        <option value="">（样例载入中…）</option>
+      </select>
+    </label>
+    <div id="traceInfo" class="mono">未调试</div>
+  </div>
+
+  <!-- ============ 工作区 ============ -->
+  <main id="workspace">
+
+    <!-- 演示区 -->
+    <section id="demoArea">
+      <div class="win" id="winArray" data-win="array">
+        <header>
+          <span class="title">数组窗</span>
+          <div class="tools">
+            <select id="arrayPick" class="mini-select"><option value="">（无可视数组）</option></select>
+            <select id="arrayStyle" class="mini-select">
+              <option value="rect">矩形块</option>
+              <option value="point">点</option>
+              <option value="grid">网格</option>
+              <option value="line">连线</option>
+              <option value="bar">二维柱状</option>
+              <option value="surface">二维曲面</option>
+              <option value="sparse">稀疏网格</option>
+            </select>
+            <button class="ico" data-max="winArray" title="最大化">▣</button>
+          </div>
+        </header>
+        <div class="body" id="arrayBody"><div class="empty">按 F8 单步后显示数组（载入样例会自动停在第 1 步）</div></div>
+      </div>
+
+      <div class="win" id="winDS" data-win="ds">
+        <header>
+          <span class="title">结构窗（数据结构）</span>
+          <div class="tools">
+            <!-- 结构切换器由视窗组件（js/viewport.js）在 dsBody 内自绘，这里不再放 select -->
+            <button class="ico" id="dsNodeSize" title="结点大小">◎</button>
+            <button class="ico" id="dsNodeShape" title="矩形 / 圆形">▢</button>
+            <button class="ico" id="dsReset" title="还原">↺</button>
+            <button class="ico" data-max="winDS" title="最大化">▣</button>
+          </div>
+        </header>
+        <div class="body" id="dsBody"><div class="empty">按 F8 单步后在此绘制链表 / 树</div></div>
+      </div>
+
+      <div class="win" id="winStack" data-win="stack">
+        <header>
+          <span class="title">运行栈</span>
+          <div class="tools"><span class="hint">地址 0 → 高（十进制）</span><button class="ico" data-max="winStack" title="最大化">▣</button></div>
+        </header>
+        <div class="body" id="stackBody"><div class="empty">按 F8 单步后显示活动记录（函数 · 参数 · 局部变量）</div></div>
+      </div>
+
+      <div class="win" id="winHeap" data-win="heap">
+        <header>
+          <span class="title">动态分配堆</span>
+          <div class="tools"><span class="hint">地址 9999 → 低（十进制）</span><button class="ico" data-max="winHeap" title="最大化">▣</button></div>
+        </header>
+        <div class="body" id="heapBody"><div class="empty">按 F8 单步后显示 malloc / free 单位</div></div>
+      </div>
+    </section>
+
+    <!-- 编辑区 -->
+    <section id="editArea">
+      <div class="win" id="structureWin" data-win="structure">
+        <header>
+          <span class="title">程序结构</span>
+          <div class="tools">
+            <button class="ico" id="btnTrackSettings" title="跟踪设置（为变量指定可视结构）">⚙</button>
+            <button class="ico" data-max="structureWin" title="最大化">▣</button>
+          </div>
+        </header>
+        <div class="body" id="structBody"><div class="empty">编译通过后显示函数与全局变量</div></div>
+      </div>
+
+      <div class="win" id="editorWin" data-win="editor">
+        <header>
+          <span class="title" id="editorTitle">未命名.c</span>
+          <div class="tools">
+            <span class="path mono" id="editorPath">—</span>
+            <button class="ico" id="btnSave" title="保存到本地">💾</button>
+            <button class="ico" id="btnOpen" title="打开本地文件">📂</button>
+            <button class="ico" data-max="editorWin" title="最大化">▣</button>
+          </div>
+        </header>
+        <div class="editor-wrap">
+          <div class="gutter" id="gutter"></div>
+          <div class="code-area">
+            <pre class="highlight" id="highlight" aria-hidden="true"></pre>
+            <textarea id="code" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="win" id="ioWin" data-win="io">
+        <header>
+          <span class="title">输入输出 / 信息</span>
+          <div class="tools">
+            <button class="tabbtn active" data-iotab="out">输出</button>
+            <button class="tabbtn" data-iotab="err">编译信息</button>
+            <button class="tabbtn" data-iotab="in">输入(stdin)</button>
+            <button class="tabbtn" data-iotab="log">执行历程</button>
+            <button class="ico" id="btnClearIo" title="清空">⌫</button>
+            <button class="ico" data-max="ioWin" title="最大化">▣</button>
+          </div>
+        </header>
+        <div class="body">
+          <pre class="io-pane active" id="pane-out"></pre>
+          <div class="io-pane" id="pane-err"><ul class="diaglist" id="diagList"></ul><pre class="rawlog mono" id="rawLog"></pre></div>
+          <textarea class="io-pane" id="pane-in" placeholder="程序用 cin / scanf 读数据时，在这里**先**填好输入（按程序读取顺序，每行一份）。
+例：
+4 4
+1 2
+1 3
+2 4
+3 4
+1
+
+提示：想在运行时手敲键盘，请点运行栏的「控制台运行」（会弹真控制台窗口）。"></textarea>
+          <pre class="io-pane" id="pane-log"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="statusbar">
+    <span id="stFile">—</span>
+    <span class="sep">|</span>
+    <span id="stPos" class="mono">行 1, 列 1</span>
+    <span class="sep">|</span>
+    <span id="stState">就绪</span>
+    <div class="grow"></div>
+    <span id="stBackend" class="mono">后端探测中…</span>
+  </footer>
+</div>
+
+<div id="dropdownHost"></div>
+<div id="dialogHost"></div>
+
+<script src="js/api.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/doc.js"></script>
+<script src="js/highlight.js"></script>
+<script src="js/vmodel.js"></script>
+<script src="js/session.js"></script>
+<script src="js/memcell.js"></script>
+<script src="js/stackheap.js"></script>
+<script src="js/arrayView.js"></script>
+<script src="js/linkView.js"></script>
+<script src="js/treeView.js"></script>
+<script src="js/dsCatalog.js"></script>
+<script src="js/detect.js"></script>
+<script src="js/arbitrate.js"></script>
+<script src="js/shape.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/ast.js"></script>
+<script src="js/viewport.js"></script>
+<script src="js/viewmgr.js"></script>
+<script src="js/menubar.js"></script>
+<script src="js/dialogs.js"></script>
+<script src="js/editor.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

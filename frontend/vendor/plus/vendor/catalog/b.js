@@ -1,0 +1,105 @@
+/** 算法包 B · 图算法与并查集（8 项 × 3 变体 = 24 个演示） */
+export const PKG_B = {
+  id: 'B',
+  name: '图算法与并查集',
+  doc: 'docs/team/final/tasks/b-graphs-engine.md',
+  title: '图算法与并查集',
+  items: [
+    {
+      id: 'bfs', title: 'BFS', points: 1,
+      ds: ['graph', 'queue'], style: 10,
+      focus: '队列内容、出队/入队、发现边、访问顺序与层号',
+      events: ['init', 'enqueue', 'dequeue', 'discover', 'visit', 'layer', 'done'],
+      path: 'algorithms/b/bfs.js',
+      variants: [
+        { id: 'v1', name: '队列 + 邻接表', note: '起点入队即标记；出队后遍历邻接表，未发现邻点标记后入队' },
+        { id: 'v2', name: '按层双队列', note: 'cur/next 两个队列交替，天然记录层号，输出每层节点集合' },
+        { id: 'v3', name: '邻接矩阵版', note: '不建邻接表，出队后扫描整行矩阵找未访问邻点（O(V²) 对照）' },
+      ],
+    },
+    {
+      id: 'dfs', title: 'DFS', points: 1,
+      ds: ['graph', 'stack'], style: 10,
+      focus: '当前边、调用栈/显式栈、首次访问时间、回退时刻',
+      events: ['init', 'enter', 'explore', 'backtrack', 'visit', 'finish', 'done'],
+      path: 'algorithms/b/dfs.js',
+      variants: [
+        { id: 'v1', name: '递归版', note: '进入即标记，依次深入未访问邻点，完成后回退（调用栈可见）' },
+        { id: 'v2', name: '显式栈迭代', note: '用显式栈压入节点，出栈即访问；展示与递归版的次序差异' },
+        { id: 'v3', name: '三色标记版', note: '白/灰/黑三色（未访问/在栈/已完成），可同时识别回边与环' },
+      ],
+    },
+    {
+      id: 'prim', title: 'Prim', points: 2,
+      ds: ['graph', 'heap'], style: 10,
+      focus: '已选顶点集合、候选跨边、本轮最小边、累计权重',
+      events: ['init', 'select', 'relax', 'pick-edge', 'reject', 'disconnected', 'done'],
+      path: 'algorithms/b/prim.js',
+      variants: [
+        { id: 'v1', name: '朴素距离数组 O(V²)', note: 'lowcost 数组 + u 集合，每轮线性找最小 lowcost' },
+        { id: 'v2', name: '小根堆优先队列', note: '把候选边压小根堆，惰性弹出已选顶点，堆内容即候选跨边' },
+        { id: 'v3', name: '边表扫描版', note: '每轮扫所有边挑一条连接树内外的轻边，明确展示"拒绝"的成因' },
+      ],
+    },
+    {
+      id: 'kruskal', title: 'Kruskal', points: 2,
+      ds: ['graph', 'dsu'], style: 10,
+      focus: '边按权排序、当前边、并查集根、拒绝成环、已选边数与总权重',
+      events: ['init', 'sort', 'probe-edge', 'union', 'reject', 'forest', 'done'],
+      path: 'algorithms/b/kruskal.js',
+      variants: [
+        { id: 'v1', name: '排序 + 按秩合并', note: '边按权排序，逐个 find 判环，异集合则 join 并累计权重' },
+        { id: 'v2', name: '排序 + 路径压缩', note: 'find 时路径压缩（把沿途父指针直接指向根），展示压缩前后父数组' },
+        { id: 'v3', name: '逆向删除法', note: '从全部边出发按权从大到小尝试删除，删后仍连通则真正删除（等价的最小生成树）' },
+      ],
+    },
+    {
+      id: 'dijkstra', title: 'Dijkstra', points: 2,
+      ds: ['graph', 'heap'], style: 10,
+      focus: '暂定距离 dist、已确定集合 S、松弛前后值、前驱 pre',
+      events: ['init', 'select-min', 'relax', 'reject-relax', 'settle', 'unreachable', 'done'],
+      path: 'algorithms/b/dijkstra.js',
+      variants: [
+        { id: 'v1', name: '朴素 O(V²)', note: '每轮线性扫描挑 dist 最小的未确定顶点，再松弛出边' },
+        { id: 'v2', name: '二叉堆（惰性删除）', note: '堆里同时存在旧距离条目，弹出时若已确定则丢弃，展示"惰性删除"' },
+        { id: 'v3', name: '路径回溯版', note: '在松弛基础上维护 pre 链，结束后从终点回溯打印整条最短路' },
+      ],
+    },
+    {
+      id: 'floyd', title: 'Floyd', points: 3,
+      ds: ['matrix'], style: 2,
+      focus: '当前中转点 k、被更新的矩阵格、不可达表示、负环检测',
+      events: ['init', 'kpivot', 'compare-path', 'update', 'skip-unreachable', 'negative-cycle', 'done'],
+      path: 'algorithms/b/floyd.js',
+      variants: [
+        { id: 'v1', name: '标准三重循环', note: 'for k → for i → for j，dist[i][j] = min(dist[i][j], dist[i][k]+dist[k][j])' },
+        { id: 'v2', name: '带 path 中转点矩阵', note: '额外维护 path[i][j] 记录最后中转点，结束后可还原任意最短路' },
+        { id: 'v3', name: '剪枝 + 负环检测', note: '跳过不可达与无效中转，结束后检查对角线是否为负以报告负环' },
+      ],
+    },
+    {
+      id: 'topological-sort', title: '拓扑排序', points: 2,
+      ds: ['graph', 'queue'], style: 10,
+      focus: '入度表、零入度队列、当前边、输出序列、环检测',
+      events: ['init', 'indegree', 'enqueue-zero', 'dequeue', 'decrement', 'enqueue', 'cycle', 'done'],
+      path: 'algorithms/b/topological-sort.js',
+      variants: [
+        { id: 'v1', name: 'Kahn 队列版', note: '统计入度，零入度入队；出队后递减后继入度，输出不足顶点数则报环' },
+        { id: 'v2', name: 'DFS 后序逆序版', note: 'DFS 完成时刻压栈，最后逆序输出；灰点遇灰点即判定有环' },
+        { id: 'v3', name: '字典序优先队列版', note: '零入度集合用最小堆而非队列，得到字典序最小的拓扑序列' },
+      ],
+    },
+    {
+      id: 'union-find', title: '并查集', points: 2,
+      ds: ['dsu'], style: 9,
+      focus: '查找路径、父节点改写、合并前后的根与集合数、非法元素拒绝',
+      events: ['init', 'find', 'path-compress', 'union-by-rank', 'same-set', 'invalid', 'done'],
+      path: 'algorithms/b/union-find.js',
+      variants: [
+        { id: 'v1', name: '父指针 + 路径压缩', note: 'find 沿父指针找根并顺带把路径上节点直接挂到根上' },
+        { id: 'v2', name: '按秩合并', note: '合并时把秩小的根挂到秩大的根下，秩只在小→大时增加' },
+        { id: 'v3', name: '按大小合并 + 路径减半', note: 'size 数组定胜负，find 时把节点挂到祖父（路径减半），摊还近常数' },
+      ],
+    },
+  ],
+};
